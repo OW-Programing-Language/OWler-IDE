@@ -122,7 +122,7 @@ export default function App(){
   }
   try{const appName=workspace.split(/[\\/]/).pop()?.replace(/[^\w-]/g,'')||'OwApp';
     const id=await call<string>('ow_task',{action,entry,name:appName,kind:packKind||'web'});
-    const label=action==='package'?`Package ${packKind||'web'}`:action==='check'?'OW Check':action==='build'?'Native Build':'OW Run';
+    const label=action==='package'?`Package ${packKind||'web'}`:action==='build'?'Native Build':'OW Run';
     setSessions(ts=>[...ts,{id,name:label,kind:'ow'}]);setTerminalVisible(true);setPanelMode('terminal');
     toast(`${label} started`);
   }catch(e){toast(String(e),true)}
