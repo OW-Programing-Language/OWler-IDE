@@ -77,12 +77,17 @@ jobs:
           OW_JAR: vendor/ow/OwIDE.jar
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Build native bundle
-        run: npm run tauri build -- --verbose
+      - name: Build native bundle (macOS)
+        if: runner.os == 'macOS'
+        run: npm run tauri build
+      - name: Build native bundle (Linux AppImage + DEB)
+        if: runner.os == 'Linux'
+        run: npm run tauri build -- --bundles deb,appimage --verbose
         env:
-          # linuxdeploy can fail to strip newer ELF libraries (.relr.dyn).
+          # The staged OW JDK is included as resources. linuxdeploy scans its
+          # ELF .so files and must resolve libjvm.so from jdk/lib/server/.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/vendor/ow/jdk/lib/server:${{ github.workspace }}/vendor/ow/jdk/lib
           NO_STRIP: 'true'
-          # Let linuxdeploy's AppImage helpers run without a FUSE mount in CI.
           APPIMAGE_EXTRACT_AND_RUN: '1'
       - uses: actions/upload-artifact@v4
         with:
