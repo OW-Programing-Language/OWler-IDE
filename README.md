@@ -4,7 +4,7 @@
 
 Owler combines a Rust/Tauri 2 native backend with a fast React/TypeScript frontend and a Monaco editor. Open existing OW projects or create new applications, use the real OW toolchain to check, run and compile code, package Night web apps, and work with GitHub and AI CLIs without leaving the editor.
 
-> **Release status:** This repository contains Owler IDE's expanded desktop application source and an automated installer pipeline. It is **not yet a verified installable release**: the native Rust/Tauri executable must pass a real build and runtime smoke test on Windows. Do not distribute it as production-ready until the CI checks and on-device test are green. The separate `OW-Programing-Language/Owler-IDE` repository has not yet been created.
+> **Release status:** This repository contains Owler IDE's expanded desktop application source and an automated installer pipeline. It is **not yet a verified installable release**: the native Rust/Tauri executable must pass a real build and runtime smoke test on Windows. Do not distribute it as production-ready until the CI checks and on-device test are green. The source is published at https://github.com/OW-Programing-Language/OWler-IDE.
 
 ## What you can do
 
@@ -47,7 +47,7 @@ npm run bundle:ow              # stages OW jar + JDK at vendor/ow
 npm run tauri build           # builds platform-specific installer
 ```
 
-On Windows, the shortcut is `build-windows.bat`. The scripted installer builds in `.github/workflows/build.yml` can be triggered on GitHub using **Actions → Owler IDE installers → Run workflow**, or by pushing a version tag.
+On Windows, the shortcut is `build-windows.bat`. The scripted installer builds in `.github/workflows/build.yml` can be triggered on GitHub using **Actions → Owler IDE installers → Run workflow**, through an automatic main-branch build, or by pushing a version tag.
 
 The resulting files are placed in `src-tauri/target/release/bundle/`. These are not produced by simply downloading the source ZIP.
 
