@@ -109,17 +109,27 @@ jobs:
           pattern: Owler-IDE-*
           merge-multiple: true
           path: release-assets
-      - name: Verify every platform is represented
+      - name: Verify and stage installers from all platforms
         shell: bash
         run: |
           set -euo pipefail
-          for ext in exe msi dmg deb AppImage; do
-            if ! compgen -G "release-assets/*.${ext}" > /dev/null; then
-              echo "::error::No *.${ext} package found; refusing incomplete release."
-              exit 1
-            fi
-          done
-          find release-assets -maxdepth 1 -type f -printf '%f (%s bytes)\n'
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          source = Path("release-assets")
+          target = Path("release-files")
+          target.mkdir(exist_ok=True)
+          packages = [p for p in source.rglob("*") if p.is_file() and p.suffix in {".exe", ".msi", ".dmg", ".deb", ".AppImage"}]
+          for ext in (".exe", ".msi", ".dmg", ".deb", ".AppImage"):
+              if not any(p.suffix == ext for p in packages):
+                  raise SystemExit(f"Missing {ext} installer in downloaded artifacts; refusing incomplete release. Found: {[str(p) for p in source.rglob('*') if p.is_file()]}")
+          for package in packages:
+              destination = target / package.name
+              if destination.exists():
+                  raise SystemExit(f"Duplicate installer filename: {package.name}")
+              shutil.copy2(package, destination)
+              print(f"Staged {destination} ({destination.stat().st_size} bytes)")
+          PY
       - name: Publish all packages in a single GitHub prerelease
         uses: softprops/action-gh-release@v2
         with:
@@ -128,7 +138,7 @@ jobs:
           name: Owler IDE v0.1.0 — cross-platform installers
           prerelease: true
           fail_on_unmatched_files: true
-          files: release-assets/*
+          files: release-files/*
           body: |
             Owler IDE Tauri desktop installers built from the OWler-IDE repository.
             Windows: .exe (NSIS), .msi. macOS: .dmg. Linux: .deb, .AppImage.
