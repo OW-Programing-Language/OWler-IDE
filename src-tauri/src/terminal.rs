@@ -1,5 +1,5 @@
 use crate::{AppState,workspace};
-use portable_pty::{native_pty_system,CommandBuilder,PtySize,PtySystem};
+use portable_pty::{native_pty_system,CommandBuilder,PtySize};
 use serde::Serialize;
 use std::{io::Write,sync::{Arc,Mutex}};
 use tauri::{Emitter,State,AppHandle,Manager};
@@ -87,7 +87,8 @@ pub fn terminal_history(session_id:String,state:State<'_,AppState>)->Result<Vec<
 #[tauri::command]
 pub fn terminal_write(session_id:String,data:String,state:State<'_,AppState>)->Result<(),String>{
  let session=state.sessions.lock().map_err(|e|e.to_string())?.get(&session_id).cloned().ok_or("Terminal no longer available")?;
- session.writer.lock().map_err(|e|e.to_string())?.write_all(data.as_bytes()).map_err(|e|e.to_string())
+ let result=session.writer.lock().map_err(|e|e.to_string())?.write_all(data.as_bytes()).map_err(|e|e.to_string());
+ result
 }
 
 #[tauri::command]
@@ -101,7 +102,8 @@ pub fn terminal_stop(session_id:String,state:State<'_,AppState>)->Result<(),Stri
 pub fn terminal_resize(session_id:String,cols:u16,rows:u16,state:State<'_,AppState>)->Result<(),String>{
  if cols<2||rows<2||cols>1000||rows>500{return Err("Invalid terminal size".into())}
  let session=state.sessions.lock().map_err(|e|e.to_string())?.get(&session_id).cloned().ok_or("Terminal no longer available")?;
- session.master.lock().map_err(|e|e.to_string())?.resize(PtySize{rows,cols,pixel_width:0,pixel_height:0}).map_err(|e|e.to_string())
+ let result=session.master.lock().map_err(|e|e.to_string())?.resize(PtySize{rows,cols,pixel_width:0,pixel_height:0}).map_err(|e|e.to_string());
+ result
 }
 
 pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,name:Option<String>,kind:Option<String>)->Result<String,String>{
