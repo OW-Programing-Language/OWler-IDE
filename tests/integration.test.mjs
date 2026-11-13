@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
-import {mkdtempSync,cpSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
+import {createServer} from 'node:net';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 
@@ -26,17 +27,48 @@ test('real OW runtime executes new console project',{skip:!jar},()=>{
  assert.equal(result.status,0,`${result.stdout}\n${result.stderr}`);
  assert.match(result.stdout,/Hello, Owler/);
 });
+// Bind the test to its own port: port 8080 may already be occupied on CI.
+async function availablePort(){
+ const server=createServer();
+ try{
+  await new Promise((resolve,reject)=>{
+   server.once('error',reject);
+   server.listen(0,'127.0.0.1',resolve);
+  });
+  const address=server.address();
+  assert.ok(address && typeof address!=='string');
+  return address.port;
+ }finally{
+  if(server.listening)await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+ }
+}
 test('real OW Night starter serves the actual HTTP health endpoint',{skip:!jar},async(t)=>{
  const dir=mkdtempSync(join(tmpdir(),'owler-night-test-'));
- cpSync(join(root,'src-tauri','templates','web.ow'),join(dir,'main.ow'));
+ const entry=join(dir,'main.ow');
+ const port=await availablePort();
+ const source=readFileSync(join(root,'src-tauri','templates','web.ow'),'utf8');
+ assert.match(source,/serve: 8080/,'Night starter needs an expected listen port');
+ writeFileSync(entry,source.replace('serve: 8080',`serve: ${port}`));
  const child=spawn('java',['-jar',jar,'run','main.ow'],{cwd:dir,stdio:['ignore','pipe','pipe']});
- let logs='';child.stdout.on('data',d=>{logs+=d.toString()});child.stderr.on('data',d=>{logs+=d.toString()});
- t.after(()=>{child.kill();rmSync(dir,{recursive:true,force:true});});
+ // Windows holds a process working directory open until the Java child exits.
+ // Register the close listener immediately to avoid missing a fast exit.
+ let closed=false;
+ const childClosed=new Promise(resolve=>child.once('close',()=>{closed=true;resolve()}));
+ let logs='';
+ child.stdout.on('data',d=>{logs+=d.toString()});
+ child.stderr.on('data',d=>{logs+=d.toString()});
+ child.on('error',error=>{logs+=`\nUnable to start OW Java process: ${error.message}`});
+ t.after(async()=>{
+  if(!closed)child.kill();
+  await childClosed;
+  // Windows AV / process-handle release can briefly delay directory removal.
+  rmSync(dir,{recursive:true,force:true,maxRetries:15,retryDelay:200});
+ });
  let response=null;
  for(let attempt=0;attempt<50;attempt++){
-  if(child.exitCode!==null)break;
+  if(closed)break;
   try{
-   const r=await fetch('http://127.0.0.1:8080/api/health',{signal:AbortSignal.timeout(750)});
+   const r=await fetch(`http://127.0.0.1:${port}/api/health`,{signal:AbortSignal.timeout(750)});
    if(r.ok){response=await r.json();break;}
   }catch{}
   await new Promise(ok=>setTimeout(ok,200));
