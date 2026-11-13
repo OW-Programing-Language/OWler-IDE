@@ -1,0 +1,20 @@
+# Night web starter — launch with Run (F5), then visit http://localhost:8080
+model Message:
+  title string
+  done bool
+
+main:
+  route "GET /":
+    respond: "<html><head><title>Night + OW</title></head><body style='font-family:system-ui;background:#101827;color:#e2e8f0;padding:60px'><h1>Hello from Night 🌙</h1><p>Built with the OW programming language and Owler IDE.</p><a style='color:#6edbd2' href='/api/health'>Check the API</a></body></html>"
+
+  route "GET /api/health":
+    respond: {status: "ok", framework: "Night", language: "OW"}
+
+  route "GET /api/messages":
+    respond: find Message
+
+  route "POST /api/messages":
+    save Message: body_json()
+    respond: response(201, {created: true})
+
+  serve: 8080

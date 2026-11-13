@@ -1,0 +1,10 @@
+# OW interactive UI starter. Press Run (F5).
+fn render():
+  return: ui_col([ui_heading("Hello, Owler!"), ui_text("Click to increment"), ui_text("Count: " + count), ui_button("Add one", "increment")])
+
+fn increment():
+  set count: count + 1
+
+main:
+  set count int: 0
+  call: ui_run("render", "My OW App")

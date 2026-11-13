@@ -1,5 +1,10 @@
 node_modules/
 dist/
+.vite/
 src-tauri/target/
+src-tauri/gen/
+vendor/ow/*
+!vendor/ow/.keep
+!.gitkeep
 .DS_Store
-.env
+*.log

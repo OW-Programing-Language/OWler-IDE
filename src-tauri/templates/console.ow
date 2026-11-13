@@ -1,0 +1,6 @@
+# Welcome to OW. Press Run (F5) in Owler IDE.
+fn greet(name string) -> string:
+  return: "Hello, " + name + "!"
+
+main:
+  print: greet("Owler")
