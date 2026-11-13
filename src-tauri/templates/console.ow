@@ -1,5 +1,5 @@
 # Welcome to OW. Press Run (F5) in Owler IDE.
-fn greet(name string) -> string:
+fn greet(name):
   return: "Hello, " + name + "!"
 
 main:
