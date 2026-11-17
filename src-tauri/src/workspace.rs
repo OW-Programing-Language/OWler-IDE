@@ -299,4 +299,41 @@ mod tests {
     assert!(valid_path(&dir, "../secret", false).is_err());
     assert!(valid_path(&dir, "/etc/passwd", false).is_err());
   }
+
+  #[test] fn scaffold_contains_hello_world_and_versioned_math_dependency() {
+    let base = std::env::temp_dir().join(format!("owler-scaffold-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&base).unwrap();
+    let result = (|| {
+      let project = scaffold_project(&base, "hello-world", "console")?;
+      let entry = fs::read_to_string(project.join("src/main.ow")).unwrap();
+      let manifest = fs::read_to_string(project.join("dependencies.yml")).unwrap();
+      let ignore = fs::read_to_string(project.join(".gitignore")).unwrap();
+      assert!(entry.contains("main:"));
+      assert!(entry.contains("print: \"Hello, World!\""));
+      assert!(manifest.contains("repositories:"));
+      assert!(manifest.contains("OW-Programing-Language/ow-math-questions"));
+      assert!(manifest.contains("version: c22d01cfee6be18d96d4c55b95b7e79892bca9f6"));
+      assert!(ignore.contains(".ow/deps/"));
+      assert!(scaffold_project(&base, "hello-world", "console").is_err());
+      assert!(scaffold_project(&base, "../escape", "console").is_err());
+      Ok::<(), String>(())
+    })();
+    fs::remove_dir_all(&base).unwrap();
+    result.unwrap();
+  }
+
+  #[test] fn every_project_starter_receives_dependencies_yml() {
+    let base = std::env::temp_dir().join(format!("owler-starters-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&base).unwrap();
+    let result = (|| {
+      for kind in ["console", "web", "ui"] {
+        let project = scaffold_project(&base, kind, kind)?;
+        assert!(project.join("src/main.ow").is_file());
+        assert!(project.join("dependencies.yml").is_file());
+      }
+      Ok::<(), String>(())
+    })();
+    fs::remove_dir_all(&base).unwrap();
+    result.unwrap();
+  }
 }
