@@ -14,7 +14,7 @@ library and the interpreter's `@Test`, `@BeforeEach`, `@AfterEach` annotations.
 - **Green ▶ gutter icons** appear beside each `@Test` function/method. Clicking one
   executes just that test via `ow test <file> --filter ClassName.methodName`.
 - **Test** in the top toolbar or **Run All** in the bottom **Tests** panel
-  executes `ow test .` for the current project, discovering test files recursively.
+  executes `ow test tests/` for the current project, discovering test files recursively.
 - Right-click `*Test.ow` or `*_test.ow` in the explorer to run that file's tests.
   Right-click a folder to run all tests within it.
 - **File → New OWUnit Test…** creates a new test class under `tests/`.
