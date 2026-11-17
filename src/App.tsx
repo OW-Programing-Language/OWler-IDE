@@ -6,12 +6,14 @@ import {
   ChevronDown,ChevronRight,ChevronsUpDown,ClipboardPaste,Cloud,Code2,Command,Copy,Download,ExternalLink,FileCode2,
   Pencil,Scissors,
   FilePlus,Files,Folder,FolderOpen,FolderPlus,GitBranch,GitCommitHorizontal,GitPullRequest,Globe,
-  Info,KeyRound,Layers,Loader2,LogOut,Menu,MoreHorizontal,Package,PanelBottom,Play,Plus,RefreshCw,Search,
+  FlaskConical,Info,KeyRound,Layers,Loader2,LogOut,Menu,MoreHorizontal,Package,PanelBottom,Play,Plus,RefreshCw,Search,
   Save,Settings2,ShieldCheck,SquareTerminal,TerminalSquare,Trash2,UploadCloud,UserMinus,UserPlus,Users,WandSparkles,X,Zap
 } from 'lucide-react';
 import EditorPane from './components/EditorPane';
+import OwTestPanel from './components/OwTestPanel';
+import {discoverOwTests,isOwTestFile} from './lib/owTests';
 import {TerminalPanel,type Session} from './components/TerminalPanel';
-import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
+import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type OwTestReport,type OwTestResult,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
 
 type Section='files'|'search'|'git'|'tools';
 type Toast={id:number;message:string;error?:boolean};
@@ -74,7 +76,11 @@ export default function App(){
  const [searchBusy,setSearchBusy]=useState(false);
  const [sessions,setSessions]=useState<Session[]>([]);
  const [terminalVisible,setTerminalVisible]=useState(true);
- const [panelMode,setPanelMode]=useState<'terminal'|'problems'|'preview'>('terminal');
+ const [panelMode,setPanelMode]=useState<'terminal'|'problems'|'preview'|'tests'>('terminal');
+ const [testReport,setTestReport]=useState<OwTestReport|null>(null);
+ const [testBusy,setTestBusy]=useState(false);
+ const [testTarget,setTestTarget]=useState('');
+ const [testFilter,setTestFilter]=useState<string|undefined>();
  const [problems,setProblems]=useState<OwDiagnostic[]>([]);
  const [jump,setJump]=useState<{path:string;line:number;column:number;nonce:number}|null>(null);
  const [previewInput,setPreviewInput]=useState('http://127.0.0.1:8080/');
@@ -216,7 +222,7 @@ export default function App(){
  const rootAbs=useCallback((nodePath:string)=>{const m=nodePath.match(/^@(\d+)$/);return roots[m?Number(m[1]):0]||''},[roots]);
  const isRootNode=useCallback((node:FileNode)=>node.directory&&(node.path===''||/^@\d+$/.test(node.path)),[]);
  const openWorkspace=useCallback(async(path:string)=>{
-  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots([path]);setTree(entries);setTabs([]);setActive('');setProblems([]);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
+  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots([path]);setTree(entries);setTabs([]);setActive('');setProblems([]);setTestReport(null);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
    const snapshot=await call<GitSnapshot>('git_status');setGit(snapshot);
    toast(`Opened ${path.split(/[\\/]/).pop()}`);
   }catch(e){toast(String(e),true)}
@@ -245,6 +251,46 @@ export default function App(){
   if(!dirty.length)return true;
   try{for(const t of dirty)await call('write_file',{path:t.path,content:t.content});setTabs(ts=>ts.map(t=>{const saved=dirty.find(d=>d.path===t.path);return saved?{...t,saved:saved.content}:t}));void refreshGit();toast(`Saved ${dirty.length} file${dirty.length===1?'':'s'}`);return true;}catch(e){toast(String(e),true);return false;}
  },[tabs,refreshGit,toast]);
+ const runOwTests=useCallback(async(target='.',filter?:string)=>{
+  if(!workspace){toast('Open an OW project before running tests',true);return}
+  if(testBusy)return;
+  if(!(await saveAll()))return;
+  setTestTarget(target);setTestFilter(filter);setTestBusy(true);setTestReport(null);
+  setPanelMode('tests');setTerminalVisible(true);
+  try{
+   const report=await call<OwTestReport>('ow_test',{target,filter});
+   setTestReport(report);
+   toast(report.ok?('OWUnit: '+report.passed+' test(s) passed'):('OWUnit failed: '+report.passed+' passed, '+report.failed+' failed'),!report.ok);
+  }catch(e){
+   const error=String(e);
+   setTestReport({ok:false,passed:0,failed:0,results:[],exit_code:null,output:error});
+   toast('OWUnit: '+error.slice(0,240),true);
+  }finally{setTestBusy(false)}
+ },[workspace,testBusy,saveAll,toast]);
+
+ const createOwUnitTest=useCallback(async(rootPath?:string)=>{
+  if(!workspace){toast('Open an OW project first',true);return}
+  const name=prompt('New OWUnit test class name','CalculatorTest');
+  if(!name)return;
+  try{
+   const file=await call<string>('create_owunit_test',{name,rootPath:rootPath??'.'});
+   await refreshTree();
+   const folder=file.slice(0,file.lastIndexOf('/'));
+   setExpanded(previous=>new Set(previous).add(folder));
+   await openFile(file);
+   toast('Created OWUnit test: '+file);
+  }catch(e){toast('Cannot create OWUnit test: '+String(e),true)}
+ },[workspace,refreshTree,openFile,toast]);
+
+ const navigateOwTest=useCallback(async(result:OwTestResult)=>{
+  if(!result.file){toast('No source file location was provided by OWUnit',true);return}
+  try{
+   const contents=await call<string>('read_file',{path:result.file});
+   const declaration=discoverOwTests(contents).find(t=>t.name===result.name);
+   await openFile(result.file);
+   setJump({path:result.file,line:declaration?.functionLine??1,column:1,nonce:Date.now()});
+  }catch(e){toast('Cannot open test: '+String(e),true)}
+ },[openFile,toast]);
  const startSession=useCallback(async(kind:'shell'|'powershell'|'claude'|'codex'|'gemini'|'aider'|'opencode')=>{
   if(!workspace){toast('Open a project first',true);return}
   try{const id=await call<string>('terminal_start',{kind});setSessions(ts=>[...ts,{id,name:({shell:'Shell',powershell:'PowerShell',claude:'Claude Code',codex:'Codex CLI',gemini:'Gemini CLI',aider:'Aider',opencode:'OpenCode'} as const)[kind],kind}]);setTerminalVisible(true);setPanelMode('terminal')}catch(e){toast(String(e),true)}
