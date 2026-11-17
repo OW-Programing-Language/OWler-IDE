@@ -258,10 +258,12 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
     let result = (|| -> Result<(), String> {
         create_file(&dir, "src/main.ow", template)?;
         create_file(&dir, "dependencies.yml", include_str!("../templates/dependencies.yml"))?;
+        create_file(&dir, "tests/ExampleTest.ow",
+            &include_str!("../templates/owunit-test.ow").replace("__TEST_CLASS__", "ExampleTest"))?;
         create_file(&dir, ".gitignore", ".ow/deps/\ndist/\nbuild/\now-data.json\n*.exe\n*.msi\n")?;
         create_file(&dir, "README.md", &format!(
             "# {name}\n\nCreated with OWler IDE.\n\n\
-            ## Getting started\n\n```sh\now deps install\now check src/main.ow\now run src/main.ow\n```\n\n\
+            ## Getting started\n\n```sh\now deps install\now check src/main.ow\now run src/main.ow\now test tests/\n```\n\n\
             `dependencies.yml` includes the OW Math Questions library and pins its Git version.\n\
             Add more OW repositories and libraries to that manifest, then use \
             `ow deps update` to refresh the generated `dependencies.lock.yml`.\n\
