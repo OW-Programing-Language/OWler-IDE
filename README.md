@@ -6,6 +6,33 @@ Owler combines a Rust/Tauri 2 native backend with a fast React/TypeScript fronte
 
 > **Release status:** This repository contains Owler IDE's expanded desktop application source and an automated installer pipeline. It is **not yet a verified installable release**: the native Rust/Tauri executable must pass a real build and runtime smoke test on Windows. Do not distribute it as production-ready until the CI checks and on-device test are green. The source is published at https://github.com/OW-Programing-Language/OWler-IDE.
 
+## Project creation and external code reload
+
+Choose **File → Create New OW Project…** (or the command palette) and enter a
+project name and parent folder. The default console starter contains:
+
+```text
+my-ow-project/
+├── src/main.ow               # prints Hello, World!
+├── dependencies.yml           # GitHub repo + OW Math Questions dependency
+├── .gitignore                 # excludes downloaded .ow/deps cache
+└── README.md
+```
+
+The project manifest starts with OW Math Questions pinned to an exact Git commit.
+Use `ow deps install` to install the library, or just run/check with an OW
+compiler that supports `dependencies.yml`. Add other repositories and libraries
+to the manifest as needed.
+
+To pick up edits from Claude Code or Codex CLI, choose **File → Reload Project**,
+click the explorer refresh button or use **Ctrl+Shift+R**. This rescans the
+project tree and refreshes the contents of already-open tabs from disk.
+Unsaved editor changes are **never silently overwritten**: tabs with unsaved
+edits remain unchanged and Owler shows a notification.
+
+The bundled OW compiler is pinned to a revision with `dependencies.yml` support,
+so the IDE's own Run/Check tasks can resolve those dependencies too.
+
 ## What you can do
 
 | Area | Capabilities |
