@@ -1,13 +1,16 @@
+import {isOwTypePosition,modernizeOwFunctionSignature} from './owModernize';
+
 export const OW_KEYWORDS = [
   'main','fn','class','interface','model','enum','module','module_type','functor',
   'functor_type','type','include','import','set','return','print','call','if',
-  'else','while','for','switch','case','default','break','continue','route',
+  'else','while','for','switch','case','default','break','continue','returns','route',
   'respond','serve','save','find','delete','with_type','new','this','private',
   'public','true','false','null','and','or','not','assert','try','catch','finally','throw'
 ];
 const descriptions:Record<string,string>={
  main:'OW application entry point; executed by `ow run`.',
- fn:'Declare an OW function with optional typed parameters and return annotation.',
+ fn:'Declare a function using OW YAML-style parameters: fn greet(name: string): followed by returns: string. Legacy -> syntax remains valid.',
+ returns:'Declare a function or method return type as YAML metadata (first line of body). Use return: to return a value.',
  class:'Define an object-oriented OW class with fields and methods.',
  module_type:'Declare a typed module signature.',
  functor:'Declare a parameterized OW module using a module_type signature.',
@@ -24,7 +27,9 @@ const descriptions:Record<string,string>={
  throw:'Raise a catchable OW exception.',
  try:'Begin a try/catch/finally block.',
  catch:'Bind the caught exception message as a string.',
- finally:'Run cleanup code after a try block.'
+ finally:'Run cleanup code after a try block.',
+ return:'Return a value from an OW function. This is different from the returns: type declaration.',
+ array:'Construct an integer array using array(size, fill). Native LLVM currently supports i32 elements only.'
 };
 const symbolPattern=/^\s*(fn|class|model|enum|interface|module|module_type|functor|functor_type)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
 function symbolsInDocument(text:string){
@@ -36,15 +41,26 @@ function symbolsInDocument(text:string){
  }
  return out;
 }
+const OW_TYPES=[
+ {name:'int',detail:'32-bit integer (native LLVM + interpreter)'},
+ {name:'string',detail:'UTF-8 string, including native concatenation and Unicode length'},
+ {name:'bool',detail:'Boolean value (native LLVM + interpreter)'},
+ {name:'array',detail:'Integer array (native LLVM subset; broader in interpreter)'},
+ {name:'float',detail:'Floating point (interpreter; not yet native LLVM)'}
+] as const;
 const builtins=['len','str','int','float','bool','array','mod','rand','time_ms','input','json','json_parse','body','body_json','param','query','response','ui_run','ui_run_web','ui_run_native','ui_heading','ui_text','ui_button','ui_image','ui_col','ui_row','ui_card','ui_grid','ui_bar','ui_space','ui_stop'];
 const snippets:[string,string,string][]=[
- ['Function', 'fn ${1:name}(${2:arg}):\n  ${3:return: 0}', 'fn'],
+ ['YAML typed function','fn ${1:name}(${2:arg}: ${3:int}):\n  returns: ${4:int}\n  return: ${5:0}','fn'],
+ ['Return type declaration','returns: ${1:int}','returns'],
+ ['Native array function','fn ${1:create}(size: int):\n  returns: array\n  return: array(size, ${2:0})','array'],
+ ['Native string function','fn ${1:greet}(name: string):\n  returns: string\n  return: "Hello " + name','string'],
+ ['Try/catch/finally','try:\n  ${1:call: work()}\ncatch ${2:message}:\n  print: ${2:message}\nfinally:\n  ${3:print: "cleanup"}','try'],
  ['Main entry', 'main:\n  ${1:print: "Hello OW!"}', 'main'],
  ['OW class', 'class ${1:MyClass}:\n  field ${2:name}\n\n  fn new(${3:value}):\n    set this.${2:name}: ${3:value}', 'class'],
  ['Data model', 'model ${1:Item}:\n  ${2:title} string\n  ${3:done} bool', 'model'],
  ['REST route','route "${1:GET} /${2:items}":\n  respond: ${3:{ok: true}}','route'],
  ['Night server','main:\n  route "GET /":\n    respond: "Hello from Night!"\n  serve: ${1:8080}','server'],
- ['Module signature','module_type ${1:SERVICE}:\n  type ${2:entity}\n  fn ${3:execute}(${4:value} int) -> int','module_type'],
+ ['Module signature','module_type ${1:SERVICE}:\n  fn ${2:execute}(${3:value}: int):\n    returns: int','module_type'],
  ['Functor','functor ${1:MakeService}(${2:Service}: ${3:SERVICE}) -> ${4:RESULT}:\n  fn ${5:run}() -> int:\n    return: ${2:Service}.${6:execute}(1)','functor'],
  ['Condition','if ${1:condition}:\n  ${2:print: "yes"}\nelse:\n  ${3:print: "no"}','if'],
  ['OWUnit test class','class ${1:ExampleTest}:\n  @BeforeEach\n  fn setUp():\n    ${2:print: "ready"}\n\n  @Test\n  fn ${3:exampleWorks}():\n    call: assert(${4:true}, "${5:test failed}")\n\n  @AfterEach\n  fn tearDown():\n    ${6:print: "finished"}','test'],
@@ -68,6 +84,7 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
    [/^\s*#[^\n]*/,'comment'],
    [/^\s*@(Test|BeforeEach|AfterEach)\b/,'owunit.annotation'],
    [/\b(?:GET|POST|PUT|PATCH|DELETE|OPTIONS)\b/,'type.identifier'],
+   [/\b(?:int|string|bool|array|float)\b/,'type.identifier'],
    [/[a-zA-Z_][\w]*/,{cases:{'@keywords':'keyword','@builtins':'predefined','@default':'identifier'}}],
    [/\b\d+(?:\.\d+)?\b/,'number'],
    [/"([^"\\]|\\.)*"/,'string'],
@@ -110,6 +127,10 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
   provideCompletionItems:(model,position)=>{
    const word=model.getWordUntilPosition(position);
    const range={startLineNumber:position.lineNumber,endLineNumber:position.lineNumber,startColumn:word.startColumn,endColumn:word.endColumn};
+   const lineBeforeCursor=model.getLineContent(position.lineNumber).slice(0,position.column-1);
+   const typeSuggestions=OW_TYPES.map(t=>({label:t.name,kind:editor.languages.CompletionItemKind.TypeParameter,
+      insertText:t.name,range,detail:t.detail,sortText:'0'+t.name}));
+   if(isOwTypePosition(lineBeforeCursor))return {suggestions:typeSuggestions};
    return {suggestions:[
     ...snippets.map(([label,insertText,trigger])=>({label:`${trigger} · ${label}`,kind:editor.languages.CompletionItemKind.Snippet,insertText,insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet,range,detail:'OW snippet'})),
     ...[...OW_KEYWORDS,...builtins].map(k=>({label:k,kind:editor.languages.CompletionItemKind.Keyword,insertText:k,range,detail:descriptions[k]})),
@@ -118,6 +139,18 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
       insertText:sym.name,range,detail:`${sym.kind} · ${m.uri.path.split('/').pop()}`
     })))
    ]};
+  }
+ });
+ // Opt-in code action; never rewrites user files implicitly.
+ editor.languages.registerCodeActionProvider('ow',{
+  provideCodeActions:(model,range)=>{
+   const lineNumber=range.startLineNumber;
+   const current=model.getLineContent(lineNumber);
+   const converted=modernizeOwFunctionSignature(current);
+   if(!converted)return {actions:[],dispose:()=>{}};
+   const edit={range:new editor.Range(lineNumber,1,lineNumber,model.getLineMaxColumn(lineNumber)),text:converted};
+   return {actions:[{title:'Modernize OW function signature to YAML style',kind:'refactor.rewrite',
+     edit:{edits:[{resource:model.uri,edit}]} }],dispose:()=>{}};
   }
  });
  editor.languages.registerDefinitionProvider('ow',{
