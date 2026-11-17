@@ -25,7 +25,7 @@ for(const [name,file] of [['console','console.ow'],['Night web','web.ow'],['inte
 test('real OW runtime executes new console project',{skip:!jar},()=>{
  const result=compiler(['run',join(root,'src-tauri','templates','console.ow')]);
  assert.equal(result.status,0,`${result.stdout}\n${result.stderr}`);
- assert.match(result.stdout,/Hello, Owler/);
+ assert.match(result.stdout,/Hello, World!/);
 });
 // Bind the test to its own port: port 8080 may already be occupied on CI.
 async function availablePort(){
