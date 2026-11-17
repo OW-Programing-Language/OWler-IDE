@@ -9,7 +9,7 @@ import {execFileSync} from 'node:child_process';
 import {existsSync,cpSync,mkdirSync,mkdtempSync,rmSync,writeFileSync,copyFileSync,readdirSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-const OW_REF=process.env.OW_REF||'3514920e31ff76c89a107efd600d1ddf0db84e83';
+const OW_REF=process.env.OW_REF||'733a4ba60bebf9958d39b8132997b58aeb91cf01';
 const sourceUrl='https://github.com/OW-Programing-Language/ow-lang.git';
 const root=resolve(import.meta.dirname,'..');
 const dest=join(root,'vendor','ow');

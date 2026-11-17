@@ -1,7 +1,7 @@
 {
   "name": "owler-ide",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "package:desktop": "npm run bundle:ow && tauri build",
     "make-latest": "node scripts/make-latest-json.mjs",
     "bundle:ow": "node scripts/bundle-ow.mjs",
-    "test": "node --test tests/contracts.test.mjs tests/quality.test.mjs",
+    "test": "node --test tests/contracts.test.mjs tests/quality.test.mjs tests/project-workflow.test.mjs",
     "tauri": "tauri",
     "check": "npm run test && npm run build",
     "check:desktop": "cargo test --manifest-path src-tauri/Cargo.toml",
