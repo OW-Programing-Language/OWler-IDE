@@ -3,7 +3,7 @@ export const OW_KEYWORDS = [
   'functor_type','type','include','import','set','return','print','call','if',
   'else','while','for','switch','case','default','break','continue','route',
   'respond','serve','save','find','delete','with_type','new','this','private',
-  'public','true','false','null','and','or','not','assert'
+  'public','true','false','null','and','or','not','assert','try','catch','finally','throw'
 ];
 const descriptions:Record<string,string>={
  main:'OW application entry point; executed by `ow run`.',
@@ -20,7 +20,11 @@ const descriptions:Record<string,string>={
  ui_run:'Start an OW user interface; choose web or native via OW_UI_MODE.',
  ui_run_native:'Start a native OW user interface.',
  ui_run_web:'Run an OW user interface in the browser.',
- import:'Import another .ow source file relative to the current file.'
+ import:'Import an OW source module, including @library aliases from dependencies.yml.',
+ throw:'Raise a catchable OW exception.',
+ try:'Begin a try/catch/finally block.',
+ catch:'Bind the caught exception message as a string.',
+ finally:'Run cleanup code after a try block.'
 };
 const symbolPattern=/^\s*(fn|class|model|enum|interface|module|module_type|functor|functor_type)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
 function symbolsInDocument(text:string){
@@ -43,6 +47,8 @@ const snippets:[string,string,string][]=[
  ['Module signature','module_type ${1:SERVICE}:\n  type ${2:entity}\n  fn ${3:execute}(${4:value} int) -> int','module_type'],
  ['Functor','functor ${1:MakeService}(${2:Service}: ${3:SERVICE}) -> ${4:RESULT}:\n  fn ${5:run}() -> int:\n    return: ${2:Service}.${6:execute}(1)','functor'],
  ['Condition','if ${1:condition}:\n  ${2:print: "yes"}\nelse:\n  ${3:print: "no"}','if'],
+ ['OWUnit test class','class ${1:ExampleTest}:\n  @BeforeEach\n  fn setUp():\n    ${2:print: "ready"}\n\n  @Test\n  fn ${3:exampleWorks}():\n    call: assert(${4:true}, "${5:test failed}")\n\n  @AfterEach\n  fn tearDown():\n    ${6:print: "finished"}','test'],
+ ['OWUnit test method','@Test\nfn ${1:exampleWorks}():\n  call: assert(${2:true}, "${3:test failed}")','test'],
  ['UI widget','ui_col([ui_heading("${1:Title}"), ui_text("${2:Hello}"), ui_button("${3:Click}", "${4:handler}")])','ui']
 ];
 
@@ -60,6 +66,7 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
   builtins,
   tokenizer:{root:[
    [/^\s*#[^\n]*/,'comment'],
+   [/^\s*@(Test|BeforeEach|AfterEach)\b/,'owunit.annotation'],
    [/\b(?:GET|POST|PUT|PATCH|DELETE|OPTIONS)\b/,'type.identifier'],
    [/[a-zA-Z_][\w]*/,{cases:{'@keywords':'keyword','@builtins':'predefined','@default':'identifier'}}],
    [/\b\d+(?:\.\d+)?\b/,'number'],
@@ -74,6 +81,7 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
   base:'vs-dark',inherit:true,
   rules:[
    {token:'keyword',foreground:'c5a0fa',fontStyle:'bold'},
+   {token:'owunit.annotation',foreground:'80dbae',fontStyle:'bold'},
    {token:'predefined',foreground:'82dacc'},
    {token:'string',foreground:'e2b683'},
    {token:'number',foreground:'f0a988'},
