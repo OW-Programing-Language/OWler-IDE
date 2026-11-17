@@ -43,7 +43,7 @@ function symbolsInDocument(text:string){
 }
 const OW_TYPES=[
  {name:'int',detail:'32-bit integer (native LLVM + interpreter)'},
- {name:'string',detail:'UTF-8 string, including native concatenation and Unicode length'},
+ {name:'string',detail:'UTF-8 string (native: string + string, len(), ==, !=; interpreter supports more)'},
  {name:'bool',detail:'Boolean value (native LLVM + interpreter)'},
  {name:'array',detail:'Integer array (native LLVM subset; broader in interpreter)'},
  {name:'float',detail:'Floating point (interpreter; not yet native LLVM)'}
