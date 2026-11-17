@@ -13,6 +13,8 @@ export type ToolchainInfo = {source:string;available:boolean;version:string;buil
 export type TerminalChunk = {session_id:string;data:string;seq:number};
 export type OwDiagnostic = {file:string;line:number;column:number;severity:'error'|'warning';message:string};
 export type OwCheckReport = {ok:boolean;output:string;diagnostics:OwDiagnostic[]};
+export type OwTestResult = {name:string;file:string;passed:boolean;message:string};
+export type OwTestReport = {ok:boolean;passed:number;failed:number;output:string;results:OwTestResult[];exit_code:number|null};
 export type TerminalExit = {session_id:string;code:number};
 export type Tab = {path:string;content:string;saved:string};
 export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
