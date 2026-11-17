@@ -1,0 +1,9 @@
+format: 1
+repositories:
+  - id: github
+    url: https://github.com
+dependencies:
+  - name: owunit
+    repository: github
+    path: OW-Programing-Language/OWUnit
+    version: fde7cb6208305a4cda3bd623c9f520521f3137bf
