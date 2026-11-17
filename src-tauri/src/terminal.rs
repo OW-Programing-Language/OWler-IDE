@@ -17,22 +17,29 @@ pub struct TerminalChunk {pub session_id:String,pub data:String,pub seq:u64}
 struct TerminalExit {session_id:String,code:i32}
 
 fn create_session(app:&AppHandle,state:&State<'_,AppState>,program:String,args:Vec<String>)->Result<String,String>{
- let cwd=workspace::root(state)?;
+ create_session_in(app,state,program,args,None)
+}
+fn create_session_in(app:&AppHandle,state:&State<'_,AppState>,program:String,args:Vec<String>,cwd:Option<std::path::PathBuf>)->Result<String,String>{
+ let cwd=match cwd{Some(c)=>c,None=>workspace::root(state)?};
+ // Hand the child a plain path, never a `\\?\` verbatim one: the bundled JDK's
+ // java.home detection fails from a verbatim cwd when the install path has a space.
+ let cwd=crate::ow::plain(&cwd);
  let pair=native_pty_system().openpty(PtySize{rows:36,cols:140,pixel_width:0,pixel_height:0}).map_err(|e|format!("PTY unavailable: {e}"))?;
  let mut builder=CommandBuilder::new(program);
  builder.args(args);
  builder.cwd(&cwd);
  let mut path=std::env::var("PATH").unwrap_or_default();
  if let Some(bundled)=crate::ow::bundled_bin(app){
-   if cfg!(windows) {path=format!("{};{}",bundled.display(),path)}else{path=format!("{}:{}",bundled.display(),path)};
+   let bundled=crate::ow::plain(&bundled);
+   if cfg!(windows) {path=format!("{};{}",bundled,path)}else{path=format!("{}:{}",bundled,path)};
  }
  if let Ok(resources) = app.path().resource_dir() {
    let bundled = resources.join("ow-toolchain");
    let jdk = bundled.join("jdk");
    if jdk.is_dir() {
-     builder.env("JAVA_HOME", &jdk);
+     builder.env("JAVA_HOME", crate::ow::plain(&jdk));
      let sep = if cfg!(windows) { ";" } else { ":" };
-     path = format!("{}{}{}", jdk.join("bin").display(), sep, path);
+     path = format!("{}{}{}", crate::ow::plain(&jdk.join("bin")), sep, path);
    }
    let zig=bundled.join("tools").join("zig").join(if cfg!(windows) {"zig.exe"} else {"zig"});
    if zig.is_file() {builder.env("OW_ZIG", zig);}
@@ -67,12 +74,13 @@ fn create_session(app:&AppHandle,state:&State<'_,AppState>,program:String,args:V
 pub fn terminal_start(kind:String,app:AppHandle,state:State<'_,AppState>)->Result<String,String>{
  let (program,args) = match kind.as_str(){
   "shell"=>if cfg!(windows){("powershell.exe".into(),vec!["-NoLogo".into()])}else{(std::env::var("SHELL").unwrap_or("/bin/sh".into()),vec![])},
+  "powershell"=>if cfg!(windows){("powershell.exe".into(),vec!["-NoLogo".into()])}else{("pwsh".into(),vec!["-NoLogo".into()])},
   "claude"=>if cfg!(windows){("cmd.exe".into(),vec!["/D".into(),"/C".into(),"claude".into()])}else{("claude".into(),vec![])},
   "codex"=>if cfg!(windows){("cmd.exe".into(),vec!["/D".into(),"/C".into(),"codex".into()])}else{("codex".into(),vec![])},
   "gemini"=>if cfg!(windows){("cmd.exe".into(),vec!["/D".into(),"/C".into(),"gemini".into()])}else{("gemini".into(),vec![])},
   "aider"=>if cfg!(windows){("cmd.exe".into(),vec!["/D".into(),"/C".into(),"aider".into()])}else{("aider".into(),vec![])},
   "opencode"=>if cfg!(windows){("cmd.exe".into(),vec!["/D".into(),"/C".into(),"opencode".into()])}else{("opencode".into(),vec![])},
-  _=>return Err("Allowed terminals: shell, claude, codex, gemini, aider, opencode".into()),
+  _=>return Err("Allowed terminals: shell, powershell, claude, codex, gemini, aider, opencode".into()),
  };
  create_session(&app,&state,program,args)
 }
@@ -107,8 +115,9 @@ pub fn terminal_resize(session_id:String,cols:u16,rows:u16,state:State<'_,AppSta
 }
 
 pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,name:Option<String>,kind:Option<String>)->Result<String,String>{
- let root=workspace::root(state)?;
- let _ = workspace::existing_ow(&root,entry)?;
+ let (root,rel)=workspace::resolve(state,entry)?;
+ let _ = workspace::existing_ow(&root,&rel)?;
+ let entry=rel.as_str();
  let (prog,mut args)=crate::ow::toolchain(app)?;
  match action {
   "check"|"run"|"build"=>{args.push(action.into());args.push(entry.into());},
@@ -122,10 +131,71 @@ pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,
   },
   _=>return Err("Invalid OW action".into())
  }
- create_session(app,state,prog,args)
+ create_session_in(app,state,prog,args,Some(root))
 }
 
 #[tauri::command]
 pub fn ow_task(action:String,entry:String,name:Option<String>,kind:Option<String>,app:AppHandle,state:State<'_,AppState>)->Result<String,String>{
  start_ow(&app,&state,&action,&entry,name,kind)
+}
+
+#[derive(serde::Serialize)]
+pub struct WebRun { pub session_id:String, pub port:u16, pub url:String }
+
+/// Start an OW web application and report where it will serve, so the IDE can
+/// open the preview — unlike `package`, this actually runs the server. It finds
+/// the file that declares `serve: <port>`, runs an optional `scripts/build-web`
+/// step, and launches from the directory the server expects.
+#[tauri::command]
+pub fn ow_serve(entry:Option<String>,app:AppHandle,state:State<'_,AppState>)->Result<WebRun,String>{
+ let port_re=regex::Regex::new(r"(?m)^\s*serve\s*:\s*(\d+)").expect("serve regex");
+ let serves=|p:&std::path::Path|->Option<u16>{
+  std::fs::read_to_string(p).ok().and_then(|s|port_re.captures(&s).and_then(|c|c.get(1)).and_then(|m|m.as_str().parse().ok()))
+ };
+ // Resolve the serving entry: prefer the caller's file if it declares a port,
+ // otherwise search the project (favouring main_ui.ow / main.ow).
+ let (root,rel,port)=match entry.as_ref().filter(|s|!s.is_empty()){
+  Some(e)=>{
+   let (root,rel)=workspace::resolve(&state,e)?;
+   match serves(&root.join(&rel)){Some(p)=>(root,rel,p),None=>find_web_entry(&root,&serves)?}
+  },
+  None=>{let root=workspace::root(&state)?;find_web_entry(&root,&serves)?},
+ };
+ workspace::existing_ow(&root,&rel)?;
+ // Web servers resolve assets relative to the folder above `src/` (matching the
+ // common OW layout); fall back to the project root.
+ let (cwd,run_entry)=match rel.find("src/"){
+  Some(i)=>(root.join(&rel[..i]),rel[i..].to_string()),
+  None=>(root.clone(),rel.clone()),
+ };
+ // Best-effort asset build if the project ships one (e.g. generated/page.json).
+ let build=cwd.join("scripts").join("build-web.mjs");
+ if build.is_file(){ let _=std::process::Command::new("node").arg("scripts/build-web.mjs").current_dir(&cwd).output(); }
+ // The generic `ow`/bundled runtime may not implement `web_ui`. Prefer a
+ // web-capable runtime: OW_JAR, or the project's packaged OW-lang runtime jar.
+ let web_jar=std::env::var("OW_JAR").ok().map(std::path::PathBuf::from).filter(|p|p.is_file())
+  .or_else(||{let p=root.join(".packaging").join("ow-lang").join("target").join("OwIDE.jar");if p.is_file(){Some(p)}else{None}});
+ let (prog,mut args)=match web_jar{
+  Some(jar)=>{let java=crate::ow::bundled_java(&app).unwrap_or_else(||"java".into());(java,vec!["-jar".into(),crate::ow::plain(&jar)])},
+  None=>crate::ow::toolchain(&app)?,
+ };
+ args.push("run".into());args.push(run_entry);
+ let session_id=create_session_in(&app,&state,prog,args,Some(cwd))?;
+ Ok(WebRun{session_id,port,url:format!("http://127.0.0.1:{port}/")})
+}
+
+fn find_web_entry(root:&std::path::Path,serves:&dyn Fn(&std::path::Path)->Option<u16>)->Result<(std::path::PathBuf,String,u16),String>{
+ let mut candidates=Vec::new();
+ crate::ow::collect_ow(root,root,&mut candidates);
+ candidates.sort_by_key(|p|{
+  let n=p.file_name().and_then(|n|n.to_str()).unwrap_or("");
+  (n!="main_ui.ow",n!="main.ow",p.components().count())
+ });
+ for p in &candidates{
+  if let Some(port)=serves(p){
+   let rel=p.strip_prefix(root).map_err(|e|e.to_string())?.to_string_lossy().replace('\\',"/");
+   return Ok((root.to_path_buf(),rel,port));
+  }
+ }
+ Err("No OW web entry found — expected a file with a `serve: <port>` route.".into())
 }

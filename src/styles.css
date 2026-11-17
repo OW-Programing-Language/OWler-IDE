@@ -41,3 +41,120 @@
 .owler-cli-status .status-dot{width:6px;height:6px}
 .owler-cli-status small{font-size:10px;color:#7c8da7;margin-left:auto}
 .tool-side-head button{margin-left:auto;color:#92a0bb}
+/* Branch switcher, GitHub connection & collaborators */
+.git-branch-banner{position:relative}
+.branch-switcher{display:flex;align-items:center;gap:7px;color:#c7b2ef;font-size:11px;padding:0;background:none}
+.branch-switcher b{font-weight:700}
+.branch-switcher svg:last-child{color:#8192ad}
+.branch-switcher:hover{color:#e3d6ff}
+.branch-menu{position:absolute;z-index:30;top:38px;left:12px;width:218px;background:#1b2436;border:1px solid #3b4761;border-radius:9px;box-shadow:0 16px 40px #000a;overflow:hidden}
+.branch-menu-head{font-size:9px;letter-spacing:1.1px;font-weight:800;color:#7f8ea9;padding:9px 12px 6px}
+.branch-menu-list{max-height:190px;overflow:auto;padding:0 5px 5px}
+.branch-menu-list button{width:100%;display:flex;align-items:center;gap:8px;text-align:left;font-size:11px;color:#b3c1da;padding:8px 8px;border-radius:5px}
+.branch-menu-list button:hover{background:#2a3650}
+.branch-menu-list button.active{color:#c9b4ff}
+.branch-menu-list button svg:first-child{color:#8f7be0}
+.branch-menu-list button svg:last-child{margin-left:auto;color:#8bd5af}
+.branch-menu-new{display:flex;gap:5px;padding:8px;border-top:1px solid #2c3850}
+.branch-menu-new input{flex:1;min-width:0;background:#0e1727;border:1px solid #3b4761;border-radius:6px;padding:7px;font-size:11px;color:#d9e2f3}
+.branch-menu-new button{width:30px;display:grid;place-items:center;background:#7460ba;color:#fff;border-radius:6px}
+.github-account{padding:10px 14px;display:flex;flex-direction:column;gap:9px}
+.github-chip{display:flex;align-items:center;gap:7px;font-size:11px;color:#9fdcbb}
+.github-chip svg{color:#7fd3a6}
+.github-chip b{color:#d4e3f6}
+.github-chip.off{color:#8192ad}
+.github-account-actions{display:flex;gap:6px}
+.github-account-actions button,.github-connect-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;font-size:10px;border:1px solid #32425b;border-radius:6px;padding:8px 5px;color:#aab8cf;background:#1c2638}
+.github-connect-btn{background:#2a2450;border-color:#58499a;color:#cbb9fa}
+.github-connect-btn:hover{background:#352c66}
+.collab-add{display:flex;gap:7px;margin-bottom:8px}
+.collab-add .dialog-input{flex:1}
+.collab-add select{background:#0e1727;border:1px solid #3b4761;border-radius:8px;padding:0 9px;color:#d9e2f3;font-size:11px}
+.collab-add button.primary{background:#a389ec;color:#1b1635;border-radius:8px;padding:0 13px;font-size:11px;font-weight:700;display:flex;align-items:center;gap:6px}
+.collab-list{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:3px;margin-top:4px}
+.collab-row{display:flex;align-items:center;gap:10px;padding:8px 6px;border-radius:6px}
+.collab-row:hover{background:#1b2537}
+.collab-row img,.collab-avatar{width:28px;height:28px;border-radius:50%;flex-shrink:0}
+.collab-avatar{display:grid;place-items:center;background:#2c3650;color:#9fb0cd}
+.collab-ident{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;cursor:pointer}
+.collab-ident b{font-size:12px;color:#d7e0f0}
+.collab-ident small{font-size:10px;color:#7f8ea9;text-transform:capitalize}
+.collab-row>button{color:#c58a96;padding:6px;border-radius:6px}
+.collab-row>button:hover{background:#3d2733;color:#ffb7c2}
+.collab-error{color:#e49aa6;font-size:11px;padding:8px 4px;line-height:1.5}
+.dialog-hint{margin:12px 0 0!important}
+.linkish{display:inline-flex;align-items:center;gap:5px;color:#b49aff;font-size:11px;padding:0;background:none}
+.linkish:hover{color:#cbb9fa;text-decoration:underline}
+/* Software update dialog */
+.status-live{display:flex;align-items:center;gap:5px;font-size:10px;color:#92a0bb;padding:0}
+.status-live:hover{color:#c3b1f6}
+.update-notes{max-height:180px;overflow:auto;background:#0e1727;border:1px solid #2c3850;border-radius:8px;padding:11px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#9fb0cd;white-space:pre-wrap;margin:0 0 6px}
+.update-bar{height:9px;border-radius:5px;background:#1b2436;border:1px solid #30405a;overflow:hidden;margin-top:8px}
+.update-bar>div{height:100%;background:linear-gradient(90deg,#8069db,#a389ec);transition:width .2s ease}
+.update-pct{text-align:right;font-size:10px;color:#9fb0cd;margin-top:5px;font-family:'JetBrains Mono',monospace}
+/* Draggable splitters for sidebar width and bottom panel height */
+.v-resizer{width:5px;min-width:5px;align-self:stretch;cursor:col-resize;background:transparent;z-index:6;transition:background .12s}
+.v-resizer:hover,.v-resizer:active{background:#a78bfa66}
+.h-resizer{height:5px;min-height:5px;cursor:row-resize;background:transparent;z-index:6;transition:background .12s}
+.h-resizer:hover,.h-resizer:active{background:#a78bfa66}
+/* Explorer right-click context menu */
+.ctx-overlay{position:fixed;inset:0;z-index:80}
+.ctx-menu{position:fixed;min-width:210px;background:#1b2436;border:1px solid #3b4761;border-radius:9px;box-shadow:0 18px 50px #000b;padding:5px;display:flex;flex-direction:column;gap:1px}
+.ctx-menu button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-size:12px;color:#c3d0e7;padding:8px 10px;border-radius:5px;white-space:nowrap}
+.ctx-menu button:hover:not(:disabled){background:#2b3853;color:#fff}
+.ctx-menu button:disabled{opacity:.4}
+.ctx-menu button svg{color:#9a8be0;flex-shrink:0}
+.ctx-menu button.ctx-danger{color:#e49aa6}
+.ctx-menu button.ctx-danger:hover{background:#3d2733;color:#ffb7c2}
+.ctx-menu button.ctx-danger svg{color:#d58391}
+.ctx-sep{height:1px;background:#2c3850;margin:4px 6px}
+/* Context-menu file-type badges */
+.ctx-ext{width:16px;min-width:16px;height:14px;display:grid;place-items:center;font-size:8px;font-weight:800;color:#8294b3;border:1px solid #3a475f;border-radius:3px;font-family:'JetBrains Mono',monospace}
+.ctx-ext.ow{color:#bd9eff;border-color:#5a4a8a}
+/* Markdown reader */
+.markdown-preview{flex:1;min-height:0;overflow:auto;background:#0d1320;display:flex;justify-content:center}
+.markdown-body{max-width:860px;width:100%;padding:34px 48px 80px;color:#c6d2e6;font-size:14px;line-height:1.72;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+.markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4{color:#e7edfa;font-weight:700;line-height:1.3;margin:1.6em 0 .6em}
+.markdown-body h1{font-size:1.95em;letter-spacing:-.5px;border-bottom:1px solid #243049;padding-bottom:.3em}
+.markdown-body h2{font-size:1.5em;border-bottom:1px solid #1f2a3f;padding-bottom:.25em}
+.markdown-body h3{font-size:1.22em}
+.markdown-body a{color:#a991f5;text-decoration:none}
+.markdown-body a:hover{text-decoration:underline}
+.markdown-body p,.markdown-body ul,.markdown-body ol,.markdown-body blockquote{margin:0 0 1em}
+.markdown-body ul,.markdown-body ol{padding-left:1.6em}
+.markdown-body li{margin:.3em 0}
+.markdown-body code{font-family:'JetBrains Mono',monospace;font-size:.86em;background:#1a2334;border:1px solid #273249;border-radius:5px;padding:.12em .4em;color:#d7c3ff}
+.markdown-body pre{background:#0b1120;border:1px solid #243049;border-radius:9px;padding:15px 17px;overflow:auto;margin:0 0 1.1em}
+.markdown-body pre code{background:none;border:0;padding:0;color:#bcd0ee;font-size:.82em}
+.markdown-body blockquote{border-left:3px solid #6a58b0;padding:.2em 0 .2em 1.1em;color:#97a6c2;background:#131c2c55}
+.markdown-body table{border-collapse:collapse;margin:0 0 1.2em;display:block;overflow:auto}
+.markdown-body th,.markdown-body td{border:1px solid #2a3649;padding:7px 13px;text-align:left}
+.markdown-body th{background:#16202f;color:#d4deee}
+.markdown-body img{max-width:100%;border-radius:8px}
+.markdown-body hr{border:0;border-top:1px solid #243049;margin:1.8em 0}
+.ctx-title{font-size:9px;letter-spacing:.9px;font-weight:800;color:#7f8ea9;padding:6px 10px 7px;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+.tree-main{margin-left:auto;display:grid;place-items:center;color:#8fe0b4;flex-shrink:0}
+.tree-main + .tree-modified{margin-left:6px}
+/* Drag & drop in the explorer */
+.tree-item.drop-target{background:#2a3550;box-shadow:inset 0 0 0 1px #8f77e0}
+.tree-item[draggable=true]{cursor:default}
+/* Settings / preferences panel */
+.settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid #1f2a3d}
+.settings-row:first-of-type{border-top:0}
+.settings-row b{font-size:13px;color:#dbe4f3;font-weight:600;display:block}
+.settings-row small{font-size:11px;color:#8294b0;display:block;margin-top:2px}
+.settings-stepper{display:flex;align-items:center;gap:4px;background:#0e1727;border:1px solid #3b4761;border-radius:7px;padding:3px}
+.settings-stepper button{width:26px;height:24px;display:grid;place-items:center;color:#c3d0e7;border-radius:4px;font-size:15px}
+.settings-stepper button:hover{background:#2b3853}
+.settings-stepper span{min-width:28px;text-align:center;font-size:12px;font-family:'JetBrains Mono',monospace;color:#e2e9f6}
+.settings-seg{display:flex;background:#0e1727;border:1px solid #3b4761;border-radius:7px;overflow:hidden}
+.settings-seg button{padding:6px 13px;font-size:12px;color:#aab8cf}
+.settings-seg button.on{background:#7460ba;color:#fff}
+.settings-toggle{width:42px;height:24px;border-radius:13px;background:#2b3750;border:1px solid #3b4761;position:relative;transition:background .15s;flex-shrink:0}
+.settings-toggle span{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#8495b3;transition:all .15s}
+.settings-toggle.on{background:#6b57b0;border-color:#8974cf}
+.settings-toggle.on span{left:21px;background:#e6ddff}
+/* Add-folder button badge + multi-root labels */
+.sidebar-heading button{position:relative}
+.plus-mini{position:absolute;right:1px;bottom:2px;font-size:9px;font-weight:900;color:#9a8be0;line-height:1}
+.explorer-tree .tree-item[style*="padding-left: 11px"]{text-transform:none}

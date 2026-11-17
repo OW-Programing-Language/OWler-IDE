@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": {
       "../vendor/ow/": "ow-toolchain/"
     },
@@ -38,5 +39,16 @@
       "icons/icon.ico",
       "icons/icon.icns"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGNTg1Qjk3MEVBMEYzNDEKUldSQjg2QU9sMXRZYnkwc1ZYLzBQbHBTMnJBaFVFOEhBZGJFSWdqTEp1ejYvYUdvOEM0M3pvVmEK",
+      "endpoints": [
+        "https://github.com/OW-Programing-Language/OWler-IDE/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

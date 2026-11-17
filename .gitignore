@@ -8,3 +8,8 @@ vendor/ow/*
 !.gitkeep
 .DS_Store
 *.log
+.idea/
+# Updater signing keys and generated manifest must never be committed
+*.key
+*.key.pub
+latest.json
