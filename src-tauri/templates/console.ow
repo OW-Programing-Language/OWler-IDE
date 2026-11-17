@@ -1,3 +1,7 @@
-# Hello World OW starter created by OWler IDE.
+# Hello World OW starter using the preferred YAML-style function syntax.
+fn greet(name: string):
+  returns: string
+  return: "Hello, " + name + "!"
+
 main:
-  print: "Hello, World!"
+  print: greet("World")
