@@ -3,6 +3,7 @@ mod git;
 mod terminal;
 mod ow;
 mod discord;
+mod owunit;
 
 use std::{collections::HashMap,path::PathBuf,sync::{Arc,Mutex}};
 
@@ -37,6 +38,7 @@ pub fn run(){
     git::github_auth_status,git::github_token_login,git::github_logout,
     git::github_collaborators,git::github_collaborator_add,git::github_collaborator_remove,
     terminal::terminal_start,terminal::terminal_write,terminal::terminal_stop,terminal::terminal_history,terminal::terminal_resize,
+    owunit::ow_test,owunit::create_owunit_test,
     terminal::ow_task,terminal::ow_serve,terminal::reload_dependencies,ow::ow_toolchain_info,ow::ow_check,ow::ow_entry,ow::environment_status,
     discord::discord_activity,discord::discord_clear,
  ])
