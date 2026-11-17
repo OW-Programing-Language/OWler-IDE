@@ -46,7 +46,8 @@ fn parse_test_output(output:&str, root:&Path, prefix:&str, exit_code:Option<i32>
 fn checked_target(root:&Path,relative:&str, filter:Option<&str>)->Result<PathBuf,String>{
     let path=root.join(relative);
     let canonical=fs::canonicalize(&path).map_err(|e|format!("Test target unavailable: {e}"))?;
-    if !canonical.starts_with(root) {return Err("Test target escapes the selected workspace".into());}
+    let canonical_root=fs::canonicalize(root).map_err(|e|e.to_string())?;
+    if !canonical.starts_with(&canonical_root) {return Err("Test target escapes the selected workspace".into());}
     if canonical.is_file() && canonical.extension().and_then(|e|e.to_str())!=Some("ow"){
         return Err("Choose an OW source file or a test directory".into());
     }
