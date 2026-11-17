@@ -7,7 +7,7 @@ import {
   Pencil,Scissors,
   FilePlus,Files,Folder,FolderOpen,FolderPlus,GitBranch,GitCommitHorizontal,GitPullRequest,Globe,
   Info,KeyRound,Layers,Loader2,LogOut,Menu,MoreHorizontal,Package,PanelBottom,Play,Plus,RefreshCw,Search,
-  Settings2,ShieldCheck,SquareTerminal,TerminalSquare,Trash2,UploadCloud,UserMinus,UserPlus,Users,WandSparkles,X,Zap
+  Save,Settings2,ShieldCheck,SquareTerminal,TerminalSquare,Trash2,UploadCloud,UserMinus,UserPlus,Users,WandSparkles,X,Zap
 } from 'lucide-react';
 import EditorPane from './components/EditorPane';
 import {TerminalPanel,type Session} from './components/TerminalPanel';
@@ -86,7 +86,8 @@ export default function App(){
  const [palette,setPalette]=useState(false);
  const [paletteQuery,setPaletteQuery]=useState('');
  const [showNewProject,setShowNewProject]=useState(false);
- const [newProject,setNewProject]=useState<NewProject>({name:'my-ow-app',kind:'web'});
+ const [showFileMenu,setShowFileMenu]=useState(false);
+ const [newProject,setNewProject]=useState<NewProject>({name:'my-ow-project',kind:'console'});
  const [showClone,setShowClone]=useState(false);
  const [cloneUrl,setCloneUrl]=useState('');
  const [showPublish,setShowPublish]=useState(false);
@@ -117,6 +118,45 @@ export default function App(){
   try{setGit(await call<GitSnapshot>('git_status'))}catch{setGit(emptyGit)}
   try{setBranches(await call<BranchList>('git_branches'))}catch{setBranches({current:'',branches:[]})}
  },[]);
+ // Refresh the explorer AND all open editor buffers from disk. Claude/Codex may
+ // edit files outside of Monaco, so refreshing only the tree is insufficient.
+ // Never overwrite an editor buffer that has unsaved user changes.
+ const reloadProject=useCallback(async()=>{
+  if(!workspace){toast('Open an OW project to reload',true);return}
+  if(!isDesktop){toast('Reload Project requires the desktop app',true);return}
+  try{
+   const freshTree=await call<FileNode[]>('list_files');
+   const disk=await Promise.all(tabs.map(async tab=>{
+    try{return {path:tab.path,text:await call<string>('read_file',{path:tab.path}),error:false}}
+    catch{return {path:tab.path,text:'',error:true}}
+   }));
+   const contents=new Map(disk.filter(item=>!item.error).map(item=>[item.path,item.text]));
+   const changed=tabs.filter(tab=>contents.has(tab.path)&&contents.get(tab.path)!==tab.saved);
+   const protectedTabs=changed.filter(tab=>tab.content!==tab.saved);
+   const safeCount=changed.length-protectedTabs.length;
+   setTree(freshTree);
+   setTabs(previous=>previous.map(tab=>{
+    const text=contents.get(tab.path);
+    if(text===undefined||text===tab.saved||tab.content!==tab.saved)return tab;
+    return {...tab,content:text,saved:text};
+   }));
+   await refreshGit();
+   const missing=disk.filter(item=>item.error).length;
+   if(protectedTabs.length||missing){
+    toast('Reloaded '+safeCount+' file(s). Kept '+protectedTabs.length+' unsaved tab(s) unchanged'+(missing?', '+missing+' unreadable/deleted file(s)':'')+'.',protectedTabs.length>0||missing>0);
+   }else{
+    toast('Project reloaded'+(safeCount?' · '+safeCount+' open file(s) refreshed':' · files already up to date'));
+   }
+  }catch(e){toast('Could not reload project: '+String(e),true)}
+ },[workspace,tabs,refreshGit,toast]);
+ useEffect(()=>{
+  if(!showFileMenu)return;
+  const close=(event:MouseEvent)=>{
+   if(!(event.target instanceof Element&&event.target.closest('.file-menu')))setShowFileMenu(false);
+  };
+  window.addEventListener('mousedown',close);
+  return()=>window.removeEventListener('mousedown',close);
+ },[showFileMenu]);
  const refreshAuth=useCallback(async()=>{
   if(!isDesktop)return;
   try{setGithubAuth(await call<GithubAuth>('github_auth_status'))}catch{/* gh not installed */}
@@ -234,8 +274,8 @@ export default function App(){
  },[tree,entry,openFile]);
  const gitAction=useCallback(async(action:string,message?:string,file?:string)=>{
   if(!workspace){toast('Open a repository first',true);return}
-  setGitBusy(true);try{const result=await call<string>('git_action',{action,message,file});setGitOutput(result||`${action} finished`);if(action==='commit')setCommitMessage('');await refreshGit();if(action==='pull'||action==='branch_switch')void refreshTree();toast(`Git ${action.replace('_',' ')} completed`)}catch(e){setGitOutput(String(e));toast(String(e),true)}finally{setGitBusy(false)}
- },[workspace,refreshGit,refreshTree,toast]);
+  setGitBusy(true);try{const result=await call<string>('git_action',{action,message,file});setGitOutput(result||`${action} finished`);if(action==='commit')setCommitMessage('');await refreshGit();if(action==='pull'||action==='branch_switch')void reloadProject();toast(`Git ${action.replace('_',' ')} completed`)}catch(e){setGitOutput(String(e));toast(String(e),true)}finally{setGitBusy(false)}
+ },[workspace,refreshGit,reloadProject,toast]);
  const switchBranch=useCallback(async(name:string)=>{
   setShowBranches(false);if(name===branches.current)return;
   await gitAction('branch_switch',name);
@@ -376,7 +416,8 @@ export default function App(){
  },[search,workspace,tree]);
  const paletteItems=useMemo(()=>[
   {name:'Open folder',hint:'File',run:pickOpen},
-  {name:'New OW project',hint:'Project',run:()=>setShowNewProject(true)},
+  {name:'New OW project',hint:'File',run:()=>setShowNewProject(true)},
+   {name:'Reload project',hint:'Ctrl+Shift+R',run:()=>{void reloadProject()}},
   {name:'Add folder to workspace',hint:'Explorer',run:()=>{void addFolder()}},
   {name:'Clone GitHub repository',hint:'Git',run:()=>setShowClone(true)},
   {name:'Publish project to GitHub',hint:'GitHub',run:()=>{setPublishName(workspace.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9-_]/g,'-')||'owler-project');setShowPublish(true)}},
@@ -397,17 +438,18 @@ export default function App(){
   {name:'Push to GitHub',hint:'Git',run:()=>{void gitAction('push')}},
   {name:'Pull from GitHub',hint:'Git',run:()=>{void gitAction('pull')}},
   ...flattenNodes(tree).filter(n=>!n.directory).map(n=>({name:n.path,hint:'File',run:()=>{void openFile(n.path)}}))
- ],[pickOpen,saveAll,runOw,runWebApp,addFolder,startSession,gitAction,openFile,tree,workspace]);
+ ],[pickOpen,saveAll,runOw,runWebApp,addFolder,startSession,gitAction,openFile,reloadProject,tree,workspace]);
  useEffect(()=>{
   const handler=(e:KeyboardEvent)=>{
    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void saveAll()}
    else if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();setPalette(true);setPaletteQuery('>')}
    else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='p'){e.preventDefault();setPalette(true);setPaletteQuery('')}
-   else if((e.ctrlKey||e.metaKey)&&e.key==='`'){e.preventDefault();setTerminalVisible(v=>!v)}
+   else if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==='r'){e.preventDefault();void reloadProject()}
+    else if((e.ctrlKey||e.metaKey)&&e.key==='`'){e.preventDefault();setTerminalVisible(v=>!v)}
    else if(e.key==='F5'){e.preventDefault();void runOw('run')}
-   else if(e.key==='Escape'){setPalette(false);setCtxMenu(null)}
+   else if(e.key==='Escape'){setPalette(false);setCtxMenu(null);setShowFileMenu(false)}
   };window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler)
- },[saveAll,runOw]);
+ },[saveAll,runOw,reloadProject]);
 
  function TreeItem({node,depth=0}:{node:FileNode;depth?:number}){
   const isExpanded=expanded.has(node.path);
@@ -422,19 +464,26 @@ export default function App(){
  const visiblePalette=paletteItems.filter(i=>i.name.toLowerCase().includes(paletteQuery.toLowerCase().replace(/^>/,''))).slice(0,18);
  return <div className="app">
   <div className="titlebar"><div className="title-brand"><span className="brand-icon"><span>o</span><span>w</span></span><span className="brand-name">owler<span className="brand-name-dim"> IDE</span></span><span className="brand-beta">BETA</span></div>
-   <div className="title-project"><Code2 size={14}/><span>{workspace?basename:'Welcome to Owler'}</span><ChevronDown size={13}/></div>
+   <div className="file-menu"><button className="file-menu-trigger" type="button" aria-expanded={showFileMenu} onClick={()=>setShowFileMenu(v=>!v)}>File <ChevronDown size={12}/></button>{showFileMenu&&<div className="file-menu-dropdown">
+    <button onClick={()=>{setShowFileMenu(false);setShowNewProject(true)}}><FilePlus size={15}/> Create New OW Project…</button>
+    <button onClick={()=>{setShowFileMenu(false);void pickOpen()}}><FolderOpen size={15}/> Open Folder…</button>
+    <div className="file-menu-separator"/>
+    <button disabled={!workspace} onClick={()=>{setShowFileMenu(false);void reloadProject()}}><RefreshCw size={15}/> Reload Project <kbd>Ctrl+Shift+R</kbd></button>
+    <button disabled={!workspace} onClick={()=>{setShowFileMenu(false);void saveAll()}}><Save size={15}/> Save All <kbd>Ctrl+S</kbd></button>
+   </div>}</div>
+    <div className="title-project"><Code2 size={14}/><span>{workspace?basename:'Welcome to Owler'}</span><ChevronDown size={13}/></div>
    <div className="title-right"><span className={`runtime-indicator ${toolchain.available?'ready':''}`}><span/>{toolchain.available?'OW READY':'OW TOOLCHAIN'}</span><button title="Command palette" onClick={()=>{setPalette(true);setPaletteQuery('')}}><Command size={15}/><span>Command palette</span><kbd>⌘ K</kbd></button><div className="title-avatar">OW</div></div>
   </div>
   <div className="toolbar"><div className="toolbar-leading"><button title="Toggle sidebar" onClick={()=>setSidebarVisible(v=>!v)}><Menu size={16}/></button><span className="toolbar-divider"/><span className="toolbar-label">WORKSPACE</span><ChevronRight size={13}/><b>{basename}</b></div>
    <div className="toolbar-center"><button className="toolbar-action muted" onClick={()=>void runOw('check')} title="Compile-time check"><Check size={15}/> Check</button><button className="toolbar-action muted" onClick={()=>void runOw('build')} title="Build native OW program"><Package size={15}/> Build</button><button className="toolbar-action muted" onClick={()=>void runWebApp()} title="Run web app (serve + open preview)"><Globe size={15}/> Run web</button><div className="dropdown"><button className="toolbar-action muted" onClick={()=>void runOw('package','web')} title="Package complete OW/Night web app"><Package size={15}/> Web app</button></div><button className="run-button" onClick={()=>void runOw('run')}><Play size={14} fill="currentColor"/> Run OW <kbd>F5</kbd></button></div>
-   <div className="toolbar-trailing"><button onClick={()=>setTerminalVisible(v=>!v)} title="Toggle terminal"><PanelBottom size={17}/></button><button onClick={()=>{setSection('tools');setSidebarVisible(true)}} title="Development tools"><Settings2 size={17}/></button></div>
+   <div className="toolbar-trailing"><button onClick={()=>void reloadProject()} disabled={!workspace} title="Reload project and open files from disk (Ctrl+Shift+R)"><RefreshCw size={16}/></button><button onClick={()=>setTerminalVisible(v=>!v)} title="Toggle terminal"><PanelBottom size={17}/></button><button onClick={()=>{setSection('tools');setSidebarVisible(true)}} title="Development tools"><Settings2 size={17}/></button></div>
   </div>
   <div className="main-layout">
    <div className="activity-rail"><div className="rail-top">
     {([['files',Files,'Explorer'],['search',Search,'Search'],['git',GitBranch,'Source control'],['tools',Layers,'Tools & extensions']] as const).map(([key,Icon,label])=><button key={key} className={section===key&&sidebarVisible?'active':''} title={label} onClick={()=>{setSection(key);setSidebarVisible(true)}}><Icon size={20}/>{key==='git'&&git.changes.length>0&&<span className="rail-dot"/>}</button>)}
    </div><div className="rail-bottom"><button title="GitHub Organization" onClick={()=>void openUrl(org)}><Cloud size={20}/></button><button title="Settings" onClick={()=>setShowSettings(true)}><Settings2 size={20}/></button></div></div>
    {sidebarVisible&&<aside className="sidebar" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
-    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void refreshTree()} title="Refresh"><RefreshCw size={14}/></button></div></div>
+    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void reloadProject()} title="Reload project (refresh open files and explorer)"><RefreshCw size={14}/></button></div></div>
      {workspace&&roots.length<=1&&<button className="workspace-fold" onClick={()=>void pickOpen()}><ChevronDown size={15}/><b>{basename.toUpperCase()}</b><MoreHorizontal size={14}/></button>}
      <div className="explorer-tree" onContextMenu={e=>{if(!workspace)return;e.preventDefault();setCtxMenu({x:e.clientX,y:e.clientY,node:{name:basename,path:'',directory:true,children:[]}})}} onDragOver={e=>{if(dragPath){e.preventDefault();e.dataTransfer.dropEffect='move'}}} onDrop={e=>{e.preventDefault();const src=dragPath;setDragPath('');setDropTarget('');if(src&&dirname(src))void moveEntry(src,'')}}>{workspace?tree.map(node=><TreeItem key={node.path} node={node}/>):<div className="sidebar-start"><FolderOpen size={28}/><p>No project opened</p><button onClick={()=>void pickOpen()}>Open folder</button><button className="secondary" onClick={()=>setShowNewProject(true)}>New OW project</button></div>}</div>
      <div className="sidebar-section-heading"><ChevronDown size={13}/> OUTLINE</div><div className="outline-hint">{active?'Symbols in the active editor':'Open a file to see its symbols'}</div>
@@ -475,7 +524,7 @@ export default function App(){
   </div>
   <div className="statusbar"><div className="status-left"><button onClick={()=>{setSection('git');setSidebarVisible(true)}}><GitBranch size={13}/>{git.branch||'No Git'}</button><span className="status-counter">{git.changes.length?`${git.changes.length} modified`:'✓'}</span><button onClick={()=>{setSection('tools');setSidebarVisible(true)}}><ShieldCheck size={13}/>{toolchain.available?'Toolchain ready':'Setup OW'}</button></div><div className="status-right"><span>{active?'UTF-8':'Owler IDE'}</span><span>Spaces: 2</span><span className="status-language"><span className="small-ow">ow</span> {active?active.split('.').pop()?.toUpperCase():'OW'}</span><button className="status-live" title="Check for updates" onClick={()=>void checkForUpdates()}><Activity size={12}/> v0.1.0</button></div></div>
   {palette&&<div className="overlay" onMouseDown={()=>setPalette(false)}><div className="palette" onMouseDown={e=>e.stopPropagation()}><div className="palette-search"><Command size={20}/><input autoFocus value={paletteQuery} onChange={e=>setPaletteQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&visiblePalette.length){visiblePalette[0].run();setPalette(false)}else if(e.key==='Escape')setPalette(false)}} placeholder="Search files and commands…"/><kbd>ESC</kbd></div><div className="palette-body"><p>COMMANDS & FILES</p>{visiblePalette.map((item,i)=><button key={i} onClick={()=>{item.run();setPalette(false)}}><span>{item.name}</span><small>{item.hint}</small></button>)}</div><div className="palette-footer">↵ to select <span>·</span> ESC to close <span>·</span> OWLER COMMANDS</div></div></div>}
-  {showNewProject&&<div className="overlay" onMouseDown={()=>setShowNewProject(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Box size={21}/></span><button onClick={()=>setShowNewProject(false)}><X size={19}/></button></div><h2>Create a new OW project</h2><p>Pick a starter. Owler will create the source files and initialize Git.</p><label>PROJECT NAME</label><input className="dialog-input" value={newProject.name} onChange={e=>setNewProject(p=>({...p,name:e.target.value}))} placeholder="my-awesome-app"/><label>PROJECT TEMPLATE</label><div className="template-list">{([['console','Console application','A clean OW entry point with a typed function.',TerminalSquare],['web','Night web app','A REST API, JSON routes and persistent model.',Globe],['ui','OW interactive UI','Build a clickable OW user interface.',Layers]] as const).map(([key,title,description,I])=><button key={key} className={newProject.kind===key?'selected':''} onClick={()=>setNewProject(v=>({...v,kind:key}))}><span className="template-icon"><I size={20}/></span><span><b>{title}</b><small>{description}</small></span><span className="radio-dot"/></button>)}</div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowNewProject(false)}>Cancel</button><button className="primary" onClick={()=>void createProject()}><Plus size={17}/> Create project</button></div></div></div>}
+  {showNewProject&&<div className="overlay" onMouseDown={()=>setShowNewProject(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Box size={21}/></span><button onClick={()=>setShowNewProject(false)}><X size={19}/></button></div><h2>Create a new OW project</h2><p>Creates src/main.ow, a ready-to-run starter, and dependencies.yml with OW Math Questions. Git is initialized when available.</p><label>PROJECT NAME</label><input className="dialog-input" value={newProject.name} onChange={e=>setNewProject(p=>({...p,name:e.target.value}))} placeholder="my-awesome-app"/><label>PROJECT TEMPLATE</label><div className="template-list">{([['console','Console application','A clean OW entry point with a typed function.',TerminalSquare],['web','Night web app','A REST API, JSON routes and persistent model.',Globe],['ui','OW interactive UI','Build a clickable OW user interface.',Layers]] as const).map(([key,title,description,I])=><button key={key} className={newProject.kind===key?'selected':''} onClick={()=>setNewProject(v=>({...v,kind:key}))}><span className="template-icon"><I size={20}/></span><span><b>{title}</b><small>{description}</small></span><span className="radio-dot"/></button>)}</div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowNewProject(false)}>Cancel</button><button className="primary" onClick={()=>void createProject()}><Plus size={17}/> Create project</button></div></div></div>}
   {showPublish&&<div className="overlay" onMouseDown={()=>setShowPublish(false)}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Cloud size={21}/></span><button onClick={()=>setShowPublish(false)}><X size={19}/></button></div><h2>Publish to OW GitHub</h2><p>Create a new repository under <b>OW-Programing-Language</b> and push your commits using the GitHub CLI (<code>gh auth login</code>). No token is stored in Owler.</p><label>REPOSITORY NAME</label><input className="dialog-input" value={publishName} onChange={e=>setPublishName(e.target.value)} placeholder="my-ow-app"/><label>DESCRIPTION</label><input className="dialog-input" value={publishDescription} onChange={e=>setPublishDescription(e.target.value)}/><label>VISIBILITY</label><div className="publish-visibility"><button className={publishVisibility==='public'?'selected':''} onClick={()=>setPublishVisibility('public')}>Public</button><button className={publishVisibility==='private'?'selected':''} onClick={()=>setPublishVisibility('private')}>Private</button></div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowPublish(false)}>Cancel</button><button className="primary" disabled={!publishName} onClick={()=>void publishToGitHub()}><UploadCloud size={17}/> Create and push</button></div></div></div>}
   {diffPreview&&<div className="overlay" onMouseDown={()=>setDiffPreview(null)}><div className="owler-diff-dialog" onMouseDown={e=>e.stopPropagation()}><div className="owler-diff-header"><FileCode2 size={17}/><b>Git diff · {diffPreview.path}</b><button onClick={()=>setDiffPreview(null)}><X size={16}/></button></div><pre>{diffPreview.content}</pre></div></div>}
   {showCreatePr&&<div className="overlay" onMouseDown={()=>setShowCreatePr(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><GitPullRequest size={19}/></span><button onClick={()=>setShowCreatePr(false)}><X size={18}/></button></div><h2>Create GitHub pull request</h2><p>Push your branch first. Owler uses your signed-in GitHub CLI.</p><label>TITLE</label><input className="dialog-input" value={prTitle} onChange={e=>setPrTitle(e.target.value)} placeholder="feat: implement OW feature"/><label>BASE BRANCH</label><input className="dialog-input" value={prBase} onChange={e=>setPrBase(e.target.value)}/><label>DESCRIPTION</label><textarea className="dialog-input" rows={5} value={prBody} onChange={e=>setPrBody(e.target.value)}/><div className="dialog-actions"><button className="cancel" onClick={()=>setShowCreatePr(false)}>Cancel</button><button className="primary" disabled={!prTitle.trim()} onClick={()=>void createPullRequest()}><GitPullRequest size={16}/> Create PR</button></div></div></div>}
