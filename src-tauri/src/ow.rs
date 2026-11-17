@@ -54,7 +54,7 @@ pub fn toolchain(app:&AppHandle)->Result<(String,Vec<String>),String>{
 #[tauri::command]
 pub fn ow_toolchain_info(app:AppHandle)->ToolchainInfo{
  let result=toolchain(&app);
- let note="Native `ow build` supports the compiler's procedural subset; `ow package --type web` uses the OW runtime and requires a local JDK 17+ with jpackage.".to_string();
+ let note="OW YAML-style `returns:` signatures, OWUnit tests, native integer arrays, dynamic UTF-8 strings and LLVM IR are available with the bundled pinned compiler. Native `ow build` supports only a subset of the language; try/catch, object graphs and Night routes still need the JVM runtime. `ow package --type web` uses that runtime and requires a full JDK 21+.".to_string();
  match result {
   Ok((prog,args))=>{
    let source=if prog=="ow"{"PATH"}else if std::env::var("OWLER_OW_BIN").is_ok(){"Custom OWLER_OW_BIN"}else{"Bundled OW compiler + JDK"};
