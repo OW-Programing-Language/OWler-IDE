@@ -87,6 +87,7 @@ export default function App(){
  const [paletteQuery,setPaletteQuery]=useState('');
  const [showNewProject,setShowNewProject]=useState(false);
  const [showFileMenu,setShowFileMenu]=useState(false);
+ const [reloadingDependencies,setReloadingDependencies]=useState(false);
  const [newProject,setNewProject]=useState<NewProject>({name:'my-ow-project',kind:'console'});
  const [showClone,setShowClone]=useState(false);
  const [cloneUrl,setCloneUrl]=useState('');
@@ -121,7 +122,7 @@ export default function App(){
  // Refresh the explorer AND all open editor buffers from disk. Claude/Codex may
  // edit files outside of Monaco, so refreshing only the tree is insufficient.
  // Never overwrite an editor buffer that has unsaved user changes.
- const reloadProject=useCallback(async()=>{
+ const reloadProject=useCallback(async(silent=false)=>{
   if(!workspace){toast('Open an OW project to reload',true);return}
   if(!isDesktop){toast('Reload Project requires the desktop app',true);return}
   try{
@@ -142,6 +143,7 @@ export default function App(){
    }));
    await refreshGit();
    const missing=disk.filter(item=>item.error).length;
+   if(silent)return;
    if(protectedTabs.length||missing){
     toast('Reloaded '+safeCount+' file(s). Kept '+protectedTabs.length+' unsaved tab(s) unchanged'+(missing?', '+missing+' unreadable/deleted file(s)':'')+'.',protectedTabs.length>0||missing>0);
    }else{
@@ -157,6 +159,31 @@ export default function App(){
   window.addEventListener('mousedown',close);
   return()=>window.removeEventListener('mousedown',close);
  },[showFileMenu]);
+ // Reload the exact project whose manifest was right-clicked (including extra roots).
+ // Save only the manifest when it has unsaved Monaco edits, never unrelated tabs.
+ const reloadDependencies=useCallback(async(path:string)=>{
+  if(reloadingDependencies)return;
+  if(!/^(?:@\d+\/)?dependencies\.yml$/.test(path)){
+   toast('Select the project-root dependencies.yml file',true);return;
+  }
+  if(!isDesktop){toast('Dependency management is available in the desktop app',true);return}
+  const modified=tabs.find(tab=>tab.path===path&&tab.content!==tab.saved);
+  if(modified&&!confirm('Save changes to dependencies.yml before reloading OW libraries?'))return;
+  setReloadingDependencies(true);
+  try{
+   if(modified){
+    const disk=await call<string>('read_file',{path});
+    if(disk!==modified.saved&&!confirm('dependencies.yml was also modified outside OWler. Overwrite the external changes with the open editor version?'))return;
+    await call('write_file',{path,content:modified.content});
+    setTabs(previous=>previous.map(tab=>tab.path===path?{...tab,saved:modified.content}:tab));
+   }
+   toast('Reloading OW dependencies from dependencies.yml…');
+   await call<string>('reload_dependencies',{path});
+   await reloadProject(true);
+   toast('OW dependencies reloaded · dependencies.lock.yml updated');
+  }catch(e){toast('Could not reload dependencies: '+String(e).slice(0,350),true)}
+  finally{setReloadingDependencies(false)}
+ },[reloadingDependencies,tabs,reloadProject,toast]);
  const refreshAuth=useCallback(async()=>{
   if(!isDesktop)return;
   try{setGithubAuth(await call<GithubAuth>('github_auth_status'))}catch{/* gh not installed */}
@@ -551,13 +578,14 @@ export default function App(){
    <div className="settings-row"><div><b>Minimap</b><small>Show the code overview on the right</small></div><button className={`settings-toggle ${settings.minimap?'on':''}`} onClick={()=>updateSetting('minimap',!settings.minimap)}><span/></button></div>
    <div className="settings-row"><div><b>Discord Rich Presence</b><small>Show “Playing OWler IDE · Editing &lt;file&gt;” on your Discord profile</small></div><button className={`settings-toggle ${settings.discord!==false?'on':''}`} onClick={()=>updateSetting('discord',settings.discord===false)}><span/></button></div>
    <div className="dialog-actions"><button className="cancel" onClick={()=>{const d={fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true};setSettings(d);localStorage.setItem('owler:settings',JSON.stringify(d))}}>Reset defaults</button><button className="primary" onClick={()=>setShowSettings(false)}>Done</button></div></div></div>}
-  {ctxMenu&&(()=>{const n=ctxMenu.node;const isRoot=isRootNode(n);const namespacedRoot=/^@\d+$/.test(n.path);const close=()=>setCtxMenu(null);const run=(f:()=>void)=>{close();f()};const staged=!n.directory;return <div className="ctx-overlay" onMouseDown={close} onContextMenu={e=>{e.preventDefault();close()}}><div className="ctx-menu" style={{left:Math.min(ctxMenu.x,window.innerWidth-220),top:Math.min(ctxMenu.y,window.innerHeight-430)}} onMouseDown={e=>e.stopPropagation()}>
+  {ctxMenu&&(()=>{const n=ctxMenu.node;const isRoot=isRootNode(n);const namespacedRoot=/^@\d+$/.test(n.path);const close=()=>setCtxMenu(null);const run=(f:()=>void)=>{close();f()};const staged=!n.directory;const isDependencyManifest=!n.directory&&/^(?:@\d+\/)?dependencies\.yml$/.test(n.path);return <div className="ctx-overlay" onMouseDown={close} onContextMenu={e=>{e.preventDefault();close()}}><div className="ctx-menu" style={{left:Math.min(ctxMenu.x,window.innerWidth-220),top:Math.min(ctxMenu.y,window.innerHeight-430)}} onMouseDown={e=>e.stopPropagation()}>
    {isRoot&&<div className="ctx-title">{n.name||basename}{roots.length>1&&!namespacedRoot?' · primary':''}</div>}
    {isRoot&&<button onClick={()=>run(()=>void addFolder())}><FolderPlus size={14}/> Add folder to workspace…</button>}
    {namespacedRoot&&<button onClick={()=>run(()=>void makePrimaryFolder(rootAbs(n.path)))}><Play size={13}/> Set as primary folder</button>}
    {isRoot&&roots.length>1&&<button className="ctx-danger" onClick={()=>run(()=>void removeFolder(rootAbs(n.path)))}><X size={14}/> Remove folder from workspace</button>}
    {isRoot&&<div className="ctx-sep"/>}
    {!n.directory&&<button onClick={()=>run(()=>void openFile(n.path))}><FileCode2 size={14}/> Open</button>}
+   {isDependencyManifest&&<button disabled={reloadingDependencies} onClick={()=>run(()=>void reloadDependencies(n.path))}>{reloadingDependencies?<Loader2 size={14} className="spin"/>:<RefreshCw size={14}/>} Reload Dependencies</button>}
    {!n.directory&&isOw(n.path)&&(n.path===mainEntry?<button onClick={()=>run(clearMain)}><Play size={13} fill="currentColor"/> Clear main entry</button>:<button onClick={()=>run(()=>setAsMain(n))}><Play size={13}/> Set as main entry</button>)}
    <button onClick={()=>run(()=>void newEntryIn(n,false))}><FilePlus size={14}/> New file…</button>
    <button onClick={()=>run(()=>void quickCreate(n,'ow','main.ow'))}><span className="ctx-ext ow">ow</span> New OW file</button>
