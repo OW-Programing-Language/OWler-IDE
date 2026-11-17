@@ -38,6 +38,9 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build Owler IDE Windows installers
         run: npm run tauri build -- --bundles nsis,msi
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: Owler-IDE-Windows
@@ -86,6 +89,9 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build native bundle
         run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: Owler-IDE-${{ runner.os }}

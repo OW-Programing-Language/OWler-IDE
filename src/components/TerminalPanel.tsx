@@ -6,7 +6,7 @@ import {ChevronDown,Maximize2,Plus,Square,TerminalSquare,X,Command,Code2,Zap} fr
 import {call,isDesktop,type TerminalChunk,type TerminalExit} from '../lib/api';
 
 export type Session={id:string;name:string;kind:string};
-type Props={sessions:Session[];onNew:(kind:'shell'|'claude'|'codex'|'gemini'|'aider'|'opencode')=>void;onRemove:(id:string)=>void;onHide:()=>void;onToggleSize:()=>void;maximized:boolean};
+type Props={sessions:Session[];onNew:(kind:'shell'|'powershell'|'claude'|'codex'|'gemini'|'aider'|'opencode')=>void;onRemove:(id:string)=>void;onHide:()=>void;onToggleSize:()=>void;maximized:boolean};
 
 function SessionView({session,visible}:{session:Session;visible:boolean}){
  const element=useRef<HTMLDivElement>(null);
@@ -55,10 +55,10 @@ export function TerminalPanel({sessions,onNew,onRemove,onHide,onToggleSize,maxim
  return <div className="terminal-container">
   <div className="panel-head terminal-head">
    <div className="panel-head-title"><TerminalSquare size={15}/><b>TERMINAL</b><span className="panel-count">{sessions.length}</span></div>
-   <div className="terminal-tabs">{sessions.map(s=><button key={s.id} className={`terminal-tab ${current===s.id?'active':''}`} onClick={()=>setSelected(s.id)}><span className="terminal-tab-mark">{s.kind==='claude'?'✳':s.kind==='codex'?'◈':s.kind==='ow'?'▶':'$'}</span>{s.name}<span onClick={e=>{e.stopPropagation();void call('terminal_stop',{sessionId:s.id}).catch(()=>{});onRemove(s.id)}} className="terminal-close"><X size={12}/></span></button>)}</div>
+   <div className="terminal-tabs">{sessions.map(s=><button key={s.id} className={`terminal-tab ${current===s.id?'active':''}`} onClick={()=>setSelected(s.id)}><span className="terminal-tab-mark">{s.kind==='claude'?'✳':s.kind==='codex'?'◈':s.kind==='ow'?'▶':s.kind==='powershell'?'>':'$'}</span>{s.name}<span onClick={e=>{e.stopPropagation();void call('terminal_stop',{sessionId:s.id}).catch(()=>{});onRemove(s.id)}} className="terminal-close"><X size={12}/></span></button>)}</div>
    <div className="terminal-actions">
     <div className="relative"><button title="New terminal" onClick={()=>setMenu(!menu)}><Plus size={15}/><ChevronDown size={12}/></button>
-     {menu&&<div className="terminal-menu">{([['shell','System shell',Command],['claude','Claude Code',Zap],['codex','OpenAI Codex',Code2],['gemini','Gemini CLI',Zap],['aider','Aider',Code2],['opencode','OpenCode',Command]] as const).map(([k,label,I])=><button key={k} onClick={()=>{onNew(k);setMenu(false)}}><I size={14}/>{label}</button>)}</div>}
+     {menu&&<div className="terminal-menu">{([['shell','System shell',Command],['powershell','PowerShell',TerminalSquare],['claude','Claude Code',Zap],['codex','OpenAI Codex',Code2],['gemini','Gemini CLI',Zap],['aider','Aider',Code2],['opencode','OpenCode',Command]] as const).map(([k,label,I])=><button key={k} onClick={()=>{onNew(k);setMenu(false)}}><I size={14}/>{label}</button>)}</div>}
     </div>
     <button title={maximized?'Restore':'Maximize'} onClick={onToggleSize}><Maximize2 size={14}/></button>
     <button title="Hide panel" onClick={onHide}><X size={15}/></button>

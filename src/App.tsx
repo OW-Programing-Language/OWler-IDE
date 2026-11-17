@@ -3,14 +3,15 @@ import {open} from '@tauri-apps/plugin-dialog';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {
   Activity,ArrowDownToLine,ArrowLeft,ArrowRight,ArrowUpRight,BookOpen,Box,Braces,Check,
-  ChevronDown,ChevronRight,ChevronsUpDown,Cloud,Code2,Command,Download,ExternalLink,FileCode2,
+  ChevronDown,ChevronRight,ChevronsUpDown,ClipboardPaste,Cloud,Code2,Command,Copy,Download,ExternalLink,FileCode2,
+  Pencil,Scissors,
   FilePlus,Files,Folder,FolderOpen,FolderPlus,GitBranch,GitCommitHorizontal,GitPullRequest,Globe,
-  Info,Layers,Loader2,Menu,MoreHorizontal,Package,PanelBottom,Play,Plus,RefreshCw,Search,
-  Settings2,ShieldCheck,SquareTerminal,TerminalSquare,Trash2,UploadCloud,WandSparkles,X,Zap
+  Info,KeyRound,Layers,Loader2,LogOut,Menu,MoreHorizontal,Package,PanelBottom,Play,Plus,RefreshCw,Search,
+  Settings2,ShieldCheck,SquareTerminal,TerminalSquare,Trash2,UploadCloud,UserMinus,UserPlus,Users,WandSparkles,X,Zap
 } from 'lucide-react';
 import EditorPane from './components/EditorPane';
 import {TerminalPanel,type Session} from './components/TerminalPanel';
-import {call,isDesktop,flattenNodes,fileName,dirname,statusName,type FileNode,type GitSnapshot,type Tab,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type GithubPullRequest,type CliAvailability} from './lib/api';
+import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
 
 type Section='files'|'search'|'git'|'tools';
 type Toast={id:number;message:string;error?:boolean};
@@ -24,8 +25,17 @@ function fileIcon(node:FileNode){return node.directory?<Folder size={15}/>:isOw(
 
 export default function App(){
  const [workspace,setWorkspacePath]=useState<string>('');
+ const [roots,setRoots]=useState<string[]>([]);
  const [tree,setTree]=useState<FileNode[]>([]);
  const [expanded,setExpanded]=useState<Set<string>>(new Set(['src','docs']));
+ const [ctxMenu,setCtxMenu]=useState<{x:number;y:number;node:FileNode}|null>(null);
+ const [clipboard,setClipboard]=useState<{node:FileNode;mode:'copy'|'cut'}|null>(null);
+ const [mainEntry,setMainEntry]=useState('');
+ const [dragPath,setDragPath]=useState('');
+ const [dropTarget,setDropTarget]=useState('');
+ const [showSettings,setShowSettings]=useState(false);
+ const [settings,setSettings]=useState(()=>{try{return {fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true,...JSON.parse(localStorage.getItem('owler:settings')||'{}')}}catch{return {fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true}}});
+ const updateSetting=useCallback((k:string,v:unknown)=>setSettings((s:Record<string,unknown>)=>{const next={...s,[k]:v};localStorage.setItem('owler:settings',JSON.stringify(next));return next}),[]);
  const [tabs,setTabs]=useState<Tab[]>([]);
  const [active,setActive]=useState('');
  const [section,setSection]=useState<Section>('files');
@@ -38,6 +48,24 @@ export default function App(){
  const [pullRequests,setPullRequests]=useState<GithubPullRequest[]>([]);
  const [prError,setPrError]=useState('');
  const [showCreatePr,setShowCreatePr]=useState(false);
+ const [branches,setBranches]=useState<BranchList>({current:'',branches:[]});
+ const [showBranches,setShowBranches]=useState(false);
+ const [newBranch,setNewBranch]=useState('');
+ const [githubAuth,setGithubAuth]=useState<GithubAuth>({connected:false,user:'',cli_available:false});
+ const [showConnect,setShowConnect]=useState(false);
+ const [token,setToken]=useState('');
+ const [connectBusy,setConnectBusy]=useState(false);
+ const [showCollaborators,setShowCollaborators]=useState(false);
+ const [collaborators,setCollaborators]=useState<Collaborator[]>([]);
+ const [collabError,setCollabError]=useState('');
+ const [collabName,setCollabName]=useState('');
+ const [collabPerm,setCollabPerm]=useState<string>('push');
+ const [collabBusy,setCollabBusy]=useState(false);
+ const [showUpdate,setShowUpdate]=useState(false);
+ const [updateState,setUpdateState]=useState<'idle'|'checking'|'available'|'downloading'|'current'|'error'>('idle');
+ const [updateInfo,setUpdateInfo]=useState<{version:string;notes:string}|null>(null);
+ const [updateProgress,setUpdateProgress]=useState(0);
+ const [updateError,setUpdateError]=useState('');
  const [prTitle,setPrTitle]=useState('');
  const [prBody,setPrBody]=useState('');
  const [prBase,setPrBase]=useState('main');
@@ -52,6 +80,8 @@ export default function App(){
  const [previewInput,setPreviewInput]=useState('http://127.0.0.1:8080/');
  const [previewUrl,setPreviewUrl]=useState('http://127.0.0.1:8080/');
  const [maxTerminal,setMaxTerminal]=useState(false);
+ const [sidebarWidth,setSidebarWidth]=useState(()=>Number(localStorage.getItem('owler:sidebar-width'))||255);
+ const [panelHeight,setPanelHeight]=useState(()=>Number(localStorage.getItem('owler:panel-height'))||268);
  const [sidebarVisible,setSidebarVisible]=useState(true);
  const [palette,setPalette]=useState(false);
  const [paletteQuery,setPaletteQuery]=useState('');
@@ -66,6 +96,18 @@ export default function App(){
  const [publishDescription,setPublishDescription]=useState('Created with Owler IDE');
  const [toasts,setToasts]=useState<Toast[]>([]);
  const toast=useCallback((message:string,error=false)=>{setToasts(v=>[...v.slice(-3),{id:Date.now()+Math.random(),message,error}]);setTimeout(()=>setToasts(v=>v.slice(1)),4300)},[]);
+ const startSidebarDrag=useCallback((e:React.MouseEvent)=>{
+  e.preventDefault();const startX=e.clientX,startW=sidebarWidth;
+  const onMove=(ev:MouseEvent)=>setSidebarWidth(Math.max(190,Math.min(620,startW+(ev.clientX-startX))));
+  const onUp=()=>{window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);document.body.style.cursor='';document.body.style.userSelect='';setSidebarWidth(w=>{localStorage.setItem('owler:sidebar-width',String(w));return w})};
+  window.addEventListener('mousemove',onMove);window.addEventListener('mouseup',onUp);document.body.style.cursor='col-resize';document.body.style.userSelect='none';
+ },[sidebarWidth]);
+ const startPanelDrag=useCallback((e:React.MouseEvent)=>{
+  e.preventDefault();const startY=e.clientY,startH=panelHeight;
+  const onMove=(ev:MouseEvent)=>setPanelHeight(Math.max(120,Math.min(window.innerHeight-220,startH+(startY-ev.clientY))));
+  const onUp=()=>{window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);document.body.style.cursor='';document.body.style.userSelect='';setPanelHeight(h=>{localStorage.setItem('owler:panel-height',String(h));return h})};
+  window.addEventListener('mousemove',onMove);window.addEventListener('mouseup',onUp);document.body.style.cursor='row-resize';document.body.style.userSelect='none';
+ },[panelHeight]);
  const refreshTree=useCallback(async()=>{
   if(!isDesktop)return;
   try{setTree(await call<FileNode[]>('list_files'))}catch(e){toast(String(e),true)}
@@ -73,9 +115,41 @@ export default function App(){
  const refreshGit=useCallback(async()=>{
   if(!isDesktop)return;
   try{setGit(await call<GitSnapshot>('git_status'))}catch{setGit(emptyGit)}
+  try{setBranches(await call<BranchList>('git_branches'))}catch{setBranches({current:'',branches:[]})}
  },[]);
+ const refreshAuth=useCallback(async()=>{
+  if(!isDesktop)return;
+  try{setGithubAuth(await call<GithubAuth>('github_auth_status'))}catch{/* gh not installed */}
+ },[]);
+ useEffect(()=>{void refreshAuth()},[refreshAuth]);
+ useEffect(()=>{setMainEntry(workspace?localStorage.getItem('owler:main:'+workspace)||'':'')},[workspace]);
+ useEffect(()=>{if(roots.length>1)setExpanded(p=>{const n=new Set(p);n.add('');roots.forEach((_,i)=>{if(i>0)n.add('@'+i)});return n})},[roots.length]);
+ // Discord Rich Presence — "Playing OWler IDE" + "Editing <file>".
+ useEffect(()=>{if(!isDesktop)return;const t=setTimeout(()=>{
+   const base=workspace.split(/[\\/]/).filter(Boolean).pop()||'';
+   if(settings.discord===false){void call('discord_clear').catch(()=>{});return}
+   const details=active?`Editing ${fileName(active)}`:workspace?`Browsing ${base}`:'Idle';
+   void call('discord_activity',{details,stateLine:base||undefined}).catch(()=>{});
+  },400);return()=>clearTimeout(t)},[active,workspace,settings.discord]);
+ const setAsMain=useCallback((node:FileNode)=>{if(!workspace)return;localStorage.setItem('owler:main:'+workspace,node.path);setMainEntry(node.path);toast(`${fileName(node.path)} is now the main entry point`)},[workspace,toast]);
+ const clearMain=useCallback(()=>{if(!workspace)return;localStorage.removeItem('owler:main:'+workspace);setMainEntry('');toast('Main entry cleared — the IDE will auto-detect it')},[workspace,toast]);
+ const addFolder=useCallback(async()=>{
+  if(!workspace){void pickOpen();return}
+  const picked=await open({directory:true,multiple:false,title:'Add a folder to this workspace'});
+  if(!picked||Array.isArray(picked))return;
+  try{const t=await call<FileNode[]>('add_root',{path:picked});setTree(t);setRoots(await call<string[]>('workspace_roots'));toast(`Added ${String(picked).split(/[\\/]/).pop()}`)}catch(e){toast(String(e),true)}
+ },[workspace,toast]);
+ const removeFolder=useCallback(async(abs:string)=>{
+  try{const t=await call<FileNode[]>('remove_root',{path:abs});setTree(t);const rs=await call<string[]>('workspace_roots');setRoots(rs);if(rs.length){setWorkspacePath(rs[0]);void refreshGit()}else{setWorkspacePath('')}toast('Removed folder from workspace')}catch(e){toast(String(e),true)}
+ },[refreshGit,toast]);
+ const makePrimaryFolder=useCallback(async(abs:string)=>{
+  try{const t=await call<FileNode[]>('set_primary_root',{path:abs});setTree(t);setRoots(await call<string[]>('workspace_roots'));setWorkspacePath(abs);void refreshGit();toast(`${abs.split(/[\\/]/).pop()} is now the primary folder`)}catch(e){toast(String(e),true)}
+ },[refreshGit,toast]);
+ // Map a tree root node (path '' or '@i') to its absolute folder path.
+ const rootAbs=useCallback((nodePath:string)=>{const m=nodePath.match(/^@(\d+)$/);return roots[m?Number(m[1]):0]||''},[roots]);
+ const isRootNode=useCallback((node:FileNode)=>node.directory&&(node.path===''||/^@\d+$/.test(node.path)),[]);
  const openWorkspace=useCallback(async(path:string)=>{
-  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setTree(entries);setTabs([]);setActive('');setProblems([]);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
+  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots([path]);setTree(entries);setTabs([]);setActive('');setProblems([]);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
    const snapshot=await call<GitSnapshot>('git_status');setGit(snapshot);
    toast(`Opened ${path.split(/[\\/]/).pop()}`);
   }catch(e){toast(String(e),true)}
@@ -104,9 +178,9 @@ export default function App(){
   if(!dirty.length)return true;
   try{for(const t of dirty)await call('write_file',{path:t.path,content:t.content});setTabs(ts=>ts.map(t=>{const saved=dirty.find(d=>d.path===t.path);return saved?{...t,saved:saved.content}:t}));void refreshGit();toast(`Saved ${dirty.length} file${dirty.length===1?'':'s'}`);return true;}catch(e){toast(String(e),true);return false;}
  },[tabs,refreshGit,toast]);
- const startSession=useCallback(async(kind:'shell'|'claude'|'codex'|'gemini'|'aider'|'opencode')=>{
+ const startSession=useCallback(async(kind:'shell'|'powershell'|'claude'|'codex'|'gemini'|'aider'|'opencode')=>{
   if(!workspace){toast('Open a project first',true);return}
-  try{const id=await call<string>('terminal_start',{kind});setSessions(ts=>[...ts,{id,name:({shell:'Shell',claude:'Claude Code',codex:'Codex CLI',gemini:'Gemini CLI',aider:'Aider',opencode:'OpenCode'} as const)[kind],kind}]);setTerminalVisible(true);setPanelMode('terminal')}catch(e){toast(String(e),true)}
+  try{const id=await call<string>('terminal_start',{kind});setSessions(ts=>[...ts,{id,name:({shell:'Shell',powershell:'PowerShell',claude:'Claude Code',codex:'Codex CLI',gemini:'Gemini CLI',aider:'Aider',opencode:'OpenCode'} as const)[kind],kind}]);setTerminalVisible(true);setPanelMode('terminal')}catch(e){toast(String(e),true)}
  },[workspace,toast]);
  const entry=useMemo(()=>isOw(active)?active:flattenNodes(tree).find(n=>n.path==='src/main.ow')?.path??flattenNodes(tree).find(n=>isOw(n.path))?.path??'',[active,tree]);
  const runOw=useCallback(async(action:'check'|'run'|'build'|'package',packKind?:string)=>{
@@ -121,12 +195,31 @@ export default function App(){
    return;
   }
   try{const appName=workspace.split(/[\\/]/).pop()?.replace(/[^\w-]/g,'')||'OwApp';
-    const id=await call<string>('ow_task',{action,entry,name:appName,kind:packKind||'web'});
+    // Run/Build/Package all need a file with a `main:` block — resolve it rather
+    // than compiling whatever module happens to be the active tab.
+    // A pinned "main entry" (right-click → Set as main entry) wins; otherwise
+    // fall back to the active tab, and the backend finds a file with `main:`.
+    const preferred=mainEntry||entry;let target=preferred;
+    try{target=await call<string>('ow_entry',{preferred})}catch(e){toast(String(e),true);return}
+    if(target!==active)toast(`Entry: ${target}`);
+    const id=await call<string>('ow_task',{action,entry:target,name:appName,kind:packKind||'web'});
     const label=action==='package'?`Package ${packKind||'web'}`:action==='build'?'Native Build':'OW Run';
     setSessions(ts=>[...ts,{id,name:label,kind:'ow'}]);setTerminalVisible(true);setPanelMode('terminal');
     toast(`${label} started`);
   }catch(e){toast(String(e),true)}
- },[entry,saveAll,toast,workspace]);
+ },[entry,active,mainEntry,saveAll,toast,workspace]);
+ const runWebApp=useCallback(async()=>{
+  if(!workspace){toast('Open a project first',true);return}
+  if(!(await saveAll()))return;
+  try{
+   const r=await call<{session_id:string;port:number;url:string}>('ow_serve',{entry:mainEntry||(isOw(active)?active:undefined)});
+   setSessions(ts=>[...ts,{id:r.session_id,name:`Web :${r.port}`,kind:'ow'}]);
+   setTerminalVisible(true);setPanelMode('terminal');setPreviewInput(r.url);
+   toast(`Web server starting on ${r.url}`);
+   // Give the server a moment to bind, then show the preview.
+   setTimeout(()=>{setPreviewUrl(r.url);setPreviewInput(r.url);setPanelMode('preview');setTerminalVisible(true)},2600);
+  }catch(e){toast(String(e),true)}
+ },[workspace,active,mainEntry,saveAll,toast]);
  const showPreview=useCallback(()=>{
   if(!/^https?:\/\/(?:localhost|127\.0\.0\.1):\d{2,5}(?:\/|$)/i.test(previewInput.trim())){
    toast('Preview accepts local development URLs only, e.g. http://127.0.0.1:8080/',true);return;
@@ -141,8 +234,59 @@ export default function App(){
  },[tree,entry,openFile]);
  const gitAction=useCallback(async(action:string,message?:string,file?:string)=>{
   if(!workspace){toast('Open a repository first',true);return}
-  setGitBusy(true);try{const result=await call<string>('git_action',{action,message,file});setGitOutput(result||`${action} finished`);if(action==='commit')setCommitMessage('');await refreshGit();if(action==='pull')void refreshTree();toast(`Git ${action.replace('_',' ')} completed`)}catch(e){setGitOutput(String(e));toast(String(e),true)}finally{setGitBusy(false)}
+  setGitBusy(true);try{const result=await call<string>('git_action',{action,message,file});setGitOutput(result||`${action} finished`);if(action==='commit')setCommitMessage('');await refreshGit();if(action==='pull'||action==='branch_switch')void refreshTree();toast(`Git ${action.replace('_',' ')} completed`)}catch(e){setGitOutput(String(e));toast(String(e),true)}finally{setGitBusy(false)}
  },[workspace,refreshGit,refreshTree,toast]);
+ const switchBranch=useCallback(async(name:string)=>{
+  setShowBranches(false);if(name===branches.current)return;
+  await gitAction('branch_switch',name);
+ },[branches.current,gitAction]);
+ const createBranch=useCallback(async()=>{
+  const name=newBranch.trim();if(!name)return;
+  setShowBranches(false);setNewBranch('');await gitAction('branch_new',name);
+ },[newBranch,gitAction]);
+ const connectToken=useCallback(async()=>{
+  if(!token.trim())return;
+  setConnectBusy(true);try{const msg=await call<string>('github_token_login',{token});setToken('');setShowConnect(false);setGitOutput(msg);await refreshAuth();toast('Connected to GitHub')}catch(e){setGitOutput(String(e));toast(String(e),true)}finally{setConnectBusy(false)}
+ },[token,refreshAuth,toast]);
+ const disconnectGithub=useCallback(async()=>{
+  try{const msg=await call<string>('github_logout');setGitOutput(msg);await refreshAuth();toast('Disconnected from GitHub')}catch(e){toast(String(e),true)}
+ },[refreshAuth,toast]);
+ const refreshCollaborators=useCallback(async()=>{
+  if(!workspace)return;
+  try{setCollabError('');setCollaborators(await call<Collaborator[]>('github_collaborators'))}
+  catch(e){setCollabError(String(e));setCollaborators([])}
+ },[workspace]);
+ const addCollaborator=useCallback(async()=>{
+  const username=collabName.trim();if(!username)return;
+  setCollabBusy(true);try{const msg=await call<string>('github_collaborator_add',{username,permission:collabPerm});setCollabName('');toast(msg);await refreshCollaborators()}catch(e){toast(String(e),true)}finally{setCollabBusy(false)}
+ },[collabName,collabPerm,refreshCollaborators,toast]);
+ const removeCollaborator=useCallback(async(username:string)=>{
+  if(!confirm(`Remove ${username} from this repository?`))return;
+  setCollabBusy(true);try{const msg=await call<string>('github_collaborator_remove',{username});toast(msg);await refreshCollaborators()}catch(e){toast(String(e),true)}finally{setCollabBusy(false)}
+ },[refreshCollaborators,toast]);
+ const openCollaborators=useCallback(()=>{setShowCollaborators(true);void refreshCollaborators()},[refreshCollaborators]);
+ const checkForUpdates=useCallback(async()=>{
+  if(!isDesktop){toast('Updates are available in the desktop app only',true);return}
+  setShowUpdate(true);setUpdateState('checking');setUpdateError('');setUpdateProgress(0);
+  try{const {check}=await import('@tauri-apps/plugin-updater');const update=await check();
+   if(update){setUpdateInfo({version:update.version,notes:update.body||''});setUpdateState('available')}
+   else{setUpdateState('current')}
+  }catch(e){setUpdateState('error');setUpdateError(String(e))}
+ },[toast]);
+ const installUpdate=useCallback(async()=>{
+  setUpdateState('downloading');setUpdateProgress(0);
+  try{const {check}=await import('@tauri-apps/plugin-updater');const {relaunch}=await import('@tauri-apps/plugin-process');
+   const update=await check();
+   if(!update){setUpdateState('current');return}
+   let total=0,received=0;
+   await update.downloadAndInstall(e=>{
+    if(e.event==='Started')total=e.data.contentLength||0;
+    else if(e.event==='Progress'){received+=e.data.chunkLength;setUpdateProgress(total?Math.min(100,Math.round(received/total*100)):0)}
+    else if(e.event==='Finished')setUpdateProgress(100);
+   });
+   toast('Update installed — restarting Owler…');await relaunch();
+  }catch(e){setUpdateState('error');setUpdateError(String(e))}
+ },[toast]);
  const refreshPrs=useCallback(async()=>{
   if(!workspace)return;
   try{setPrError('');setPullRequests(await call<GithubPullRequest[]>('github_pr_list'))}
@@ -173,6 +317,40 @@ export default function App(){
   if(!confirm(`Permanently delete ${node.path}${node.directory?' and all its contents':''}?`))return;
   try{await call('delete_entry',{path:node.path});setTabs(ts=>ts.filter(t=>t.path!==node.path&&!t.path.startsWith(node.path+'/')));if(active===node.path||active.startsWith(node.path+'/'))setActive('');await refreshTree();toast('Deleted')}catch(e){toast(String(e),true)}
  },[active,refreshTree,toast]);
+ const parentDir=useCallback((node:FileNode)=>node.directory?node.path:dirname(node.path).replace(/\/$/,''),[]);
+ const newEntryIn=useCallback(async(node:FileNode,directory:boolean)=>{
+  const base=parentDir(node);const name=prompt(directory?'New folder name':'New file name',directory?'new-folder':'new-file.ow');
+  if(!name)return;const path=base?`${base}/${name}`:name;
+  try{await call('new_entry',{path,directory});setExpanded(p=>new Set(p).add(base));await refreshTree();if(!directory)void openFile(path)}catch(e){toast(String(e),true)}
+ },[parentDir,refreshTree,openFile,toast]);
+ const quickCreate=useCallback(async(node:FileNode,ext:string,placeholder:string)=>{
+  const base=parentDir(node);const input=prompt(`New ${ext.toUpperCase()} file name`,placeholder);
+  if(!input)return;const name=input.endsWith(`.${ext}`)?input:`${input}.${ext}`;const path=base?`${base}/${name}`:name;
+  try{await call('new_entry',{path,directory:false});setExpanded(p=>new Set(p).add(base));await refreshTree();void openFile(path)}catch(e){toast(String(e),true)}
+ },[parentDir,refreshTree,openFile,toast]);
+ const pasteInto=useCallback(async(node:FileNode)=>{
+  if(!clipboard)return;const base=parentDir(node);const name=fileName(clipboard.node.path);
+  let target=base?`${base}/${name}`:name;
+  if(target===clipboard.node.path&&clipboard.mode==='copy'){const dot=name.lastIndexOf('.');const copy=dot>0?`${name.slice(0,dot)} copy${name.slice(dot)}`:`${name} copy`;target=base?`${base}/${copy}`:copy}
+  try{
+   if(clipboard.mode==='copy')await call('copy_entry',{path:clipboard.node.path,newPath:target});
+   else{await call('rename_entry',{path:clipboard.node.path,newPath:target});setClipboard(null)}
+   setExpanded(p=>new Set(p).add(base));await refreshTree();toast(clipboard.mode==='copy'?'Pasted':'Moved')
+  }catch(e){toast(String(e),true)}
+ },[clipboard,parentDir,refreshTree,toast]);
+ const absOf=useCallback((p:string)=>{const m=p.match(/^@(\d+)(?:\/(.*))?$/);if(m){const base=roots[Number(m[1])]||'';return `${base}/${m[2]||''}`.replace(/\/$/,'')}return `${workspace}/${p}`.replace(/\/$/,'')},[roots,workspace]);
+ const revealEntry=useCallback((node:FileNode)=>{if(!workspace)return;const folder=node.directory?node.path:dirname(node.path).replace(/\/$/,'');void openUrl(absOf(folder).replace(/\//g,'\\'))},[workspace,absOf]);
+ const moveEntry=useCallback(async(src:string,destDir:string)=>{
+  if(!src)return;const name=fileName(src);const target=destDir?`${destDir}/${name}`:name;
+  if(target===src)return;
+  if(destDir===src||destDir.startsWith(src+'/')){toast("A folder can't be moved into itself",true);return}
+  if((dirname(src).replace(/\/$/,''))===destDir)return; // already there
+  try{await call('rename_entry',{path:src,newPath:target});
+   setTabs(ts=>ts.map(t=>t.path===src?{...t,path:target}:t.path.startsWith(src+'/')?{...t,path:target+t.path.slice(src.length)}:t));
+   if(active===src)setActive(target);else if(active.startsWith(src+'/'))setActive(target+active.slice(src.length));
+   if(destDir)setExpanded(p=>new Set(p).add(destDir));await refreshTree();toast(`Moved ${name}`)
+  }catch(e){toast(String(e),true)}
+ },[active,refreshTree,toast]);
  const createProject=useCallback(async()=>{
   if(!isDesktop){toast('Use the desktop app',true);return}
   const parent=await open({directory:true,multiple:false,title:'Choose where to create the OW project'});
@@ -199,12 +377,14 @@ export default function App(){
  const paletteItems=useMemo(()=>[
   {name:'Open folder',hint:'File',run:pickOpen},
   {name:'New OW project',hint:'Project',run:()=>setShowNewProject(true)},
+  {name:'Add folder to workspace',hint:'Explorer',run:()=>{void addFolder()}},
   {name:'Clone GitHub repository',hint:'Git',run:()=>setShowClone(true)},
   {name:'Publish project to GitHub',hint:'GitHub',run:()=>{setPublishName(workspace.split(/[\\/]/).pop()?.toLowerCase().replace(/[^a-z0-9-_]/g,'-')||'owler-project');setShowPublish(true)}},
   {name:'Save all files',hint:'Ctrl+S',run:()=>{void saveAll()}},
   {name:'Run OW application',hint:'F5',run:()=>{void runOw('run')}},
   {name:'Check OW source',hint:'Build',run:()=>{void runOw('check')}},
   {name:'Build native executable',hint:'Build',run:()=>{void runOw('build')}},
+  {name:'Run web app (serve + preview)',hint:'Run',run:()=>{void runWebApp()}},
   {name:'Package Night web app',hint:'Build',run:()=>{void runOw('package','web')}},
   {name:'Package native GUI',hint:'Build',run:()=>{void runOw('package','gui')}},
   {name:'Open Claude Code',hint:'Agent',run:()=>{void startSession('claude')}},
@@ -213,10 +393,11 @@ export default function App(){
   {name:'Open Aider',hint:'Agent',run:()=>{void startSession('aider')}},
   {name:'Open OpenCode',hint:'Agent',run:()=>{void startSession('opencode')}},
   {name:'Open system terminal',hint:'Terminal',run:()=>{void startSession('shell')}},
+  {name:'Open PowerShell terminal',hint:'Terminal',run:()=>{void startSession('powershell')}},
   {name:'Push to GitHub',hint:'Git',run:()=>{void gitAction('push')}},
   {name:'Pull from GitHub',hint:'Git',run:()=>{void gitAction('pull')}},
   ...flattenNodes(tree).filter(n=>!n.directory).map(n=>({name:n.path,hint:'File',run:()=>{void openFile(n.path)}}))
- ],[pickOpen,saveAll,runOw,startSession,gitAction,openFile,tree,workspace]);
+ ],[pickOpen,saveAll,runOw,runWebApp,addFolder,startSession,gitAction,openFile,tree,workspace]);
  useEffect(()=>{
   const handler=(e:KeyboardEvent)=>{
    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void saveAll()}
@@ -224,16 +405,17 @@ export default function App(){
    else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='p'){e.preventDefault();setPalette(true);setPaletteQuery('')}
    else if((e.ctrlKey||e.metaKey)&&e.key==='`'){e.preventDefault();setTerminalVisible(v=>!v)}
    else if(e.key==='F5'){e.preventDefault();void runOw('run')}
-   else if(e.key==='Escape')setPalette(false);
+   else if(e.key==='Escape'){setPalette(false);setCtxMenu(null)}
   };window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler)
  },[saveAll,runOw]);
 
  function TreeItem({node,depth=0}:{node:FileNode;depth?:number}){
   const isExpanded=expanded.has(node.path);
   const modified=git.changes.some(c=>c.path===node.path);
-  return <><div className={`tree-item ${node.path===active?'selected':''}`} style={{paddingLeft:11+depth*13}} onClick={()=>node.directory?setExpanded(prev=>{const n=new Set(prev);if(n.has(node.path))n.delete(node.path);else n.add(node.path);return n;}):void openFile(node.path)} onContextMenu={e=>{e.preventDefault();const choice=prompt(`Action for ${node.path}: rename / delete / copy path`,'rename');if(choice==='rename')void renameNode(node);else if(choice==='delete')void deleteNode(node);else if(choice==='copy path')void navigator.clipboard.writeText(node.path)}}>
+  const dropDir=node.directory?node.path:dirname(node.path).replace(/\/$/,'');
+  return <><div className={`tree-item ${node.path===active?'selected':''} ${dropTarget===node.path?'drop-target':''}`} style={{paddingLeft:11+depth*13}} draggable onDragStart={e=>{e.stopPropagation();setDragPath(node.path);e.dataTransfer.effectAllowed='move'}} onDragEnd={()=>{setDragPath('');setDropTarget('')}} onDragOver={e=>{if(dragPath&&dragPath!==node.path){e.preventDefault();e.dataTransfer.dropEffect='move';setDropTarget(node.path)}}} onDragLeave={()=>setDropTarget(t=>t===node.path?'':t)} onDrop={e=>{e.preventDefault();e.stopPropagation();const src=dragPath;setDragPath('');setDropTarget('');if(src)void moveEntry(src,dropDir)}} onClick={()=>node.directory?setExpanded(prev=>{const n=new Set(prev);if(n.has(node.path))n.delete(node.path);else n.add(node.path);return n;}):void openFile(node.path)} onContextMenu={e=>{e.preventDefault();e.stopPropagation();setCtxMenu({x:e.clientX,y:e.clientY,node})}}>
    <span className="tree-chevron">{node.directory?(isExpanded?<ChevronDown size={13}/>:<ChevronRight size={13}/>):null}</span>
-   <span className={`tree-icon ${isOw(node.path)?'ow':''}`}>{node.directory?isExpanded?<FolderOpen size={15}/>:<Folder size={15}/>:fileIcon(node)}</span><span className="tree-label">{node.name}</span>{modified&&<span className="tree-modified">M</span>}
+   <span className={`tree-icon ${isOw(node.path)?'ow':''}`}>{node.directory?isExpanded?<FolderOpen size={15}/>:<Folder size={15}/>:fileIcon(node)}</span><span className="tree-label">{node.name}</span>{node.path===mainEntry&&<span className="tree-main" title="Main entry point"><Play size={10} fill="currentColor"/></span>}{modified&&<span className="tree-modified">M</span>}
   </div>{node.directory&&isExpanded&&node.children.map(n=><TreeItem node={n} depth={depth+1} key={n.path}/>)}</>;
  }
  const basename=workspace.split(/[\\/]/).filter(Boolean).pop()||'NO FOLDER';
@@ -244,39 +426,45 @@ export default function App(){
    <div className="title-right"><span className={`runtime-indicator ${toolchain.available?'ready':''}`}><span/>{toolchain.available?'OW READY':'OW TOOLCHAIN'}</span><button title="Command palette" onClick={()=>{setPalette(true);setPaletteQuery('')}}><Command size={15}/><span>Command palette</span><kbd>⌘ K</kbd></button><div className="title-avatar">OW</div></div>
   </div>
   <div className="toolbar"><div className="toolbar-leading"><button title="Toggle sidebar" onClick={()=>setSidebarVisible(v=>!v)}><Menu size={16}/></button><span className="toolbar-divider"/><span className="toolbar-label">WORKSPACE</span><ChevronRight size={13}/><b>{basename}</b></div>
-   <div className="toolbar-center"><button className="toolbar-action muted" onClick={()=>void runOw('check')} title="Compile-time check"><Check size={15}/> Check</button><button className="toolbar-action muted" onClick={()=>void runOw('build')} title="Build native OW program"><Package size={15}/> Build</button><div className="dropdown"><button className="toolbar-action muted" onClick={()=>void runOw('package','web')} title="Package complete OW/Night web app"><Globe size={15}/> Web app</button></div><button className="run-button" onClick={()=>void runOw('run')}><Play size={14} fill="currentColor"/> Run OW <kbd>F5</kbd></button></div>
+   <div className="toolbar-center"><button className="toolbar-action muted" onClick={()=>void runOw('check')} title="Compile-time check"><Check size={15}/> Check</button><button className="toolbar-action muted" onClick={()=>void runOw('build')} title="Build native OW program"><Package size={15}/> Build</button><button className="toolbar-action muted" onClick={()=>void runWebApp()} title="Run web app (serve + open preview)"><Globe size={15}/> Run web</button><div className="dropdown"><button className="toolbar-action muted" onClick={()=>void runOw('package','web')} title="Package complete OW/Night web app"><Package size={15}/> Web app</button></div><button className="run-button" onClick={()=>void runOw('run')}><Play size={14} fill="currentColor"/> Run OW <kbd>F5</kbd></button></div>
    <div className="toolbar-trailing"><button onClick={()=>setTerminalVisible(v=>!v)} title="Toggle terminal"><PanelBottom size={17}/></button><button onClick={()=>{setSection('tools');setSidebarVisible(true)}} title="Development tools"><Settings2 size={17}/></button></div>
   </div>
   <div className="main-layout">
    <div className="activity-rail"><div className="rail-top">
     {([['files',Files,'Explorer'],['search',Search,'Search'],['git',GitBranch,'Source control'],['tools',Layers,'Tools & extensions']] as const).map(([key,Icon,label])=><button key={key} className={section===key&&sidebarVisible?'active':''} title={label} onClick={()=>{setSection(key);setSidebarVisible(true)}}><Icon size={20}/>{key==='git'&&git.changes.length>0&&<span className="rail-dot"/>}</button>)}
-   </div><div className="rail-bottom"><button title="GitHub Organization" onClick={()=>void openUrl(org)}><Cloud size={20}/></button><button title="Settings" onClick={()=>{setSection('tools');setSidebarVisible(true)}}><Settings2 size={20}/></button></div></div>
-   {sidebarVisible&&<aside className="sidebar">
-    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void refreshTree()} title="Refresh"><RefreshCw size={14}/></button></div></div>
-     <button className="workspace-fold" onClick={()=>void pickOpen()}><ChevronDown size={15}/><b>{basename.toUpperCase()}</b><MoreHorizontal size={14}/></button>
-     <div className="explorer-tree">{workspace?tree.map(node=><TreeItem key={node.path} node={node}/>):<div className="sidebar-start"><FolderOpen size={28}/><p>No project opened</p><button onClick={()=>void pickOpen()}>Open folder</button><button className="secondary" onClick={()=>setShowNewProject(true)}>New OW project</button></div>}</div>
+   </div><div className="rail-bottom"><button title="GitHub Organization" onClick={()=>void openUrl(org)}><Cloud size={20}/></button><button title="Settings" onClick={()=>setShowSettings(true)}><Settings2 size={20}/></button></div></div>
+   {sidebarVisible&&<aside className="sidebar" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
+    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void refreshTree()} title="Refresh"><RefreshCw size={14}/></button></div></div>
+     {workspace&&roots.length<=1&&<button className="workspace-fold" onClick={()=>void pickOpen()}><ChevronDown size={15}/><b>{basename.toUpperCase()}</b><MoreHorizontal size={14}/></button>}
+     <div className="explorer-tree" onContextMenu={e=>{if(!workspace)return;e.preventDefault();setCtxMenu({x:e.clientX,y:e.clientY,node:{name:basename,path:'',directory:true,children:[]}})}} onDragOver={e=>{if(dragPath){e.preventDefault();e.dataTransfer.dropEffect='move'}}} onDrop={e=>{e.preventDefault();const src=dragPath;setDragPath('');setDropTarget('');if(src&&dirname(src))void moveEntry(src,'')}}>{workspace?tree.map(node=><TreeItem key={node.path} node={node}/>):<div className="sidebar-start"><FolderOpen size={28}/><p>No project opened</p><button onClick={()=>void pickOpen()}>Open folder</button><button className="secondary" onClick={()=>setShowNewProject(true)}>New OW project</button></div>}</div>
      <div className="sidebar-section-heading"><ChevronDown size={13}/> OUTLINE</div><div className="outline-hint">{active?'Symbols in the active editor':'Open a file to see its symbols'}</div>
      {active&&<div className="outline-list">{tabs.find(t=>t.path===active)?.content.split('\n').filter(l=>/^\s*(fn |class |model |module |functor |interface |main:|route )/.test(l)).slice(0,30).map((s,i)=><div key={i}><Braces size={12}/>{s.trim().slice(0,48)}</div>)}</div>}
     </>}
     {section==='git'&&<><div className="sidebar-heading"><span>SOURCE CONTROL</span><div><button title="Refresh Git" onClick={()=>void refreshGit()}><RefreshCw size={14}/></button><button title="Fetch" onClick={()=>void gitAction('fetch')}><Cloud size={15}/></button></div></div>
      {!git.initialized?<div className="sidebar-start"><GitBranch size={28}/><p>This folder isn't a Git repository yet.</p><button onClick={()=>void gitAction('init')}>Initialize repository</button></div>:<>
-       <div className="git-branch-banner"><GitBranch size={15}/><b>{git.branch||'(detached)'}</b><span>{git.changes.length} changes</span></div>
+       <div className="git-branch-banner"><button className="branch-switcher" title="Switch or create branch" onClick={()=>setShowBranches(v=>!v)}><GitBranch size={15}/><b>{git.branch||'(detached)'}</b><ChevronsUpDown size={13}/></button><span>{git.changes.length} changes</span>
+        {showBranches&&<div className="branch-menu"><div className="branch-menu-head">SWITCH BRANCH</div><div className="branch-menu-list">{branches.branches.length===0&&<div className="subtle-message">No branches yet.</div>}{branches.branches.map(b=><button key={b} className={b===branches.current?'active':''} disabled={gitBusy} onClick={()=>void switchBranch(b)}><GitBranch size={13}/>{b}{b===branches.current&&<Check size={13}/>}</button>)}</div><div className="branch-menu-new"><input placeholder="new-branch-name" value={newBranch} onChange={e=>setNewBranch(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void createBranch()}}/><button title="Create branch" disabled={!newBranch.trim()||gitBusy} onClick={()=>void createBranch()}><Plus size={14}/></button></div></div>}
+       </div>
        <div className="commit-form"><textarea placeholder="Message (Ctrl+Enter to commit)" rows={3} value={commitMessage} onChange={e=>setCommitMessage(e.target.value)} onKeyDown={e=>{if(e.ctrlKey&&e.key==='Enter')void gitAction('commit',commitMessage)}}/><button disabled={!commitMessage.trim()||gitBusy} onClick={()=>void gitAction('commit',commitMessage)}><GitCommitHorizontal size={15}/> Commit staged files</button></div>
        <div className="git-toolbar"><button title="Stage all changes" onClick={()=>void gitAction('stage_all')}><Plus size={14}/> Stage all</button><button title="Pull" onClick={()=>void gitAction('pull')}><ArrowDownToLine size={14}/> Pull</button><button title="Push" onClick={()=>void gitAction('push')}><UploadCloud size={14}/> Push</button></div>
        <div className="sidebar-section-heading">CHANGES <span className="pill-counter">{git.changes.length}</span></div><div className="changes-list">{git.changes.map((c,i)=><div className="change-row" key={c.path+i}><span className={`git-status-badge ${statusName(c.status)}`}>{statusName(c.status)}</span><span title={c.path} onClick={()=>void previewDiff(c.path)}>{fileName(c.path)}<small>{dirname(c.path)}</small></span><button title="View diff" onClick={()=>void previewDiff(c.path)}><FileCode2 size={14}/></button><button title="Stage file" onClick={()=>void gitAction('stage',undefined,c.path)}><Plus size={14}/></button><button title="Unstage file" onClick={()=>void gitAction('unstage',undefined,c.path)}>−</button></div>)}{git.changes.length===0&&<div className="subtle-message">Working tree clean.</div>}</div>
        <div className="sidebar-section-heading">GITHUB PULL REQUESTS <button title="Refresh pull requests" onClick={()=>void refreshPrs()}><RefreshCw size={12}/></button><button title="Create pull request" onClick={()=>setShowCreatePr(true)}><Plus size={13}/></button></div>
        <div className="owler-pr-list">{pullRequests.map(pr=><button key={pr.number} onClick={()=>void openUrl(pr.url)}><GitPullRequest size={13}/><span><b>#{pr.number} {pr.title}</b><small>{pr.headRefName} → {pr.baseRefName}{pr.isDraft?' · Draft':''}</small></span></button>)}{prError&&<p>{prError}</p>}</div>
+       <div className="sidebar-section-heading">GITHUB ACCOUNT</div>
+       <div className="github-account">{githubAuth.connected?<><span className="github-chip"><Check size={13}/> Connected as <b>{githubAuth.user}</b></span><div className="github-account-actions"><button onClick={openCollaborators}><Users size={14}/> Collaborators</button><button title="Disconnect" onClick={()=>void disconnectGithub()}><LogOut size={14}/> Disconnect</button></div></>:<><span className="github-chip off">Not connected to GitHub</span><button className="github-connect-btn" onClick={()=>setShowConnect(true)}><KeyRound size={14}/> Connect with token</button></>}</div>
        <div className="sidebar-section-heading">RECENT COMMITS</div><div className="commit-list">{git.last_commits.map((l,i)=><div key={i}><GitCommitHorizontal size={13}/><span title={l}>{l}</span></div>)}</div>
        <div className="git-footer"><button onClick={()=>{const url=prompt('GitHub remote URL',git.remote||`${org}/my-project.git`);if(url)void gitAction('remote_set',url)}}><Cloud size={14}/>{git.remote?'Edit remote':'Set GitHub remote'}</button><button onClick={()=>void gitAction('push_upstream')}>Push upstream <ArrowUpRight size={13}/></button></div>
      </>}<div className="git-publish"><button onClick={()=>{setPublishName(basename.toLowerCase().replace(/[^a-z0-9-_]/g,'-'));setShowPublish(true)}}><UploadCloud size={15}/> Publish new repo to GitHub</button></div>{gitOutput&&<div className="git-output" title={gitOutput}>{gitOutput.slice(0,800)}</div>}
     </>}
     {section==='search'&&<><div className="sidebar-heading"><span>SEARCH</span></div><div className="search-area"><div className="search-field"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void doSearch()}} placeholder="Search across workspace"/></div><button onClick={()=>void doSearch()} disabled={!search||searchBusy}>{searchBusy?<Loader2 size={15} className="spin"/>:<Search size={15}/>} Find in files</button><small>Searches up to 180 text files, 250 matches.</small></div><div className="sidebar-section-heading">RESULTS <span className="pill-counter">{searchResults.length}</span></div><div className="search-results">{searchResults.map((r,i)=><button key={i} onClick={()=>{void openFile(r.path).then(()=>setJump({path:r.path,line:r.line,column:1,nonce:Date.now()}))}}><b>{fileName(r.path)} <small>:{r.line}</small></b><span>{r.text}</span><small>{r.path}</small></button>)}</div></>}
     {section==='tools'&&<><div className="sidebar-heading"><span>DEVELOPMENT TOOLS</span></div><div className="tool-side-head">OW INTEGRATION</div><div className="tool-status"><span className={`status-dot ${toolchain.available?'good':''}`}/><div><b>{toolchain.available?'OW toolchain detected':'Toolchain not found'}</b><small>{toolchain.source}<br/>{toolchain.version||'Start via Tauri to detect the OW runtime'}</small></div></div><div className="side-menu">
-      <button onClick={()=>void runOw('check')}><Check size={16}/> Check OW syntax</button><button onClick={()=>void runOw('run')}><Play size={16}/> Run OW application</button><button onClick={()=>void runOw('build')}><Package size={16}/> Native compiler</button><button onClick={()=>void runOw('package','web')}><Globe size={16}/> Package web service</button><button onClick={()=>void runOw('package','gui')}><Box size={16}/> Package GUI app</button><button onClick={()=>void runOw('package','console')}><TerminalSquare size={16}/> Package console app</button><button onClick={()=>{setPanelMode('preview');setTerminalVisible(true)}}><Globe size={16}/> Web preview (localhost)</button>
-     </div><div className="tool-side-head">AI CODING AGENTS</div><div className="side-menu"><button onClick={()=>void startSession('claude')}><Zap size={16}/> Claude Code CLI</button><button onClick={()=>void startSession('codex')}><WandSparkles size={16}/> OpenAI Codex CLI</button><button onClick={()=>void startSession('shell')}><SquareTerminal size={16}/> System terminal</button><button onClick={()=>void startSession('gemini')}><Zap size={16}/> Gemini CLI</button><button onClick={()=>void startSession('aider')}><Code2 size={16}/> Aider</button><button onClick={()=>void startSession('opencode')}><WandSparkles size={16}/> OpenCode</button></div><div className="tool-side-head">DETECTED DEVELOPMENT TOOLS <button onClick={()=>void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(e=>toast(String(e),true))}><RefreshCw size={12}/></button></div><div className="owler-cli-status">{environment.map(item=><div key={item.name}><span className={`status-dot ${item.available?'good':''}`}/><b>{item.name}</b><small>{item.available?'Available':'Not installed'}</small></div>)}</div><div className="tool-side-head">FRAMEWORKS & DOCS</div><div className="side-menu"><button onClick={()=>void openUrl('https://github.com/OW-Programing-Language/ow-lang')}><Code2 size={16}/> OW language <ExternalLink size={12}/></button><button onClick={()=>void openUrl(night)}><Globe size={16}/> Night web framework <ExternalLink size={12}/></button><button onClick={()=>void openUrl(`${org}/flOW---OW-Modular-Framework`)}><Layers size={16}/> flOW Modulith <ExternalLink size={12}/></button></div><div className="tool-note">{toolchain.build_note||'The bundled OW compiler will be staged during installer builds.'}</div></>}
+      <button onClick={()=>void runOw('check')}><Check size={16}/> Check OW syntax</button><button onClick={()=>void runOw('run')}><Play size={16}/> Run OW application</button><button onClick={()=>void runWebApp()}><Globe size={16}/> Run web app (serve + preview)</button><button onClick={()=>void runOw('build')}><Package size={16}/> Native compiler</button><button onClick={()=>void runOw('package','web')}><Globe size={16}/> Package web service</button><button onClick={()=>void runOw('package','gui')}><Box size={16}/> Package GUI app</button><button onClick={()=>void runOw('package','console')}><TerminalSquare size={16}/> Package console app</button><button onClick={()=>{setPanelMode('preview');setTerminalVisible(true)}}><Globe size={16}/> Web preview (localhost)</button>
+     </div><div className="tool-side-head">AI CODING AGENTS</div><div className="side-menu"><button onClick={()=>void startSession('claude')}><Zap size={16}/> Claude Code CLI</button><button onClick={()=>void startSession('codex')}><WandSparkles size={16}/> OpenAI Codex CLI</button><button onClick={()=>void startSession('shell')}><SquareTerminal size={16}/> System terminal</button><button onClick={()=>void startSession('powershell')}><TerminalSquare size={16}/> PowerShell</button><button onClick={()=>void startSession('gemini')}><Zap size={16}/> Gemini CLI</button><button onClick={()=>void startSession('aider')}><Code2 size={16}/> Aider</button><button onClick={()=>void startSession('opencode')}><WandSparkles size={16}/> OpenCode</button></div><div className="tool-side-head">DETECTED DEVELOPMENT TOOLS <button onClick={()=>void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(e=>toast(String(e),true))}><RefreshCw size={12}/></button></div><div className="owler-cli-status">{environment.map(item=><div key={item.name}><span className={`status-dot ${item.available?'good':''}`}/><b>{item.name}</b><small>{item.available?'Available':'Not installed'}</small></div>)}</div><div className="tool-side-head">SOFTWARE UPDATES</div><div className="side-menu"><button onClick={()=>void checkForUpdates()}><Download size={16}/> Check for updates</button></div><div className="tool-side-head">FRAMEWORKS & DOCS</div><div className="side-menu"><button onClick={()=>void openUrl('https://github.com/OW-Programing-Language/ow-lang')}><Code2 size={16}/> OW language <ExternalLink size={12}/></button><button onClick={()=>void openUrl(night)}><Globe size={16}/> Night web framework <ExternalLink size={12}/></button><button onClick={()=>void openUrl(`${org}/flOW---OW-Modular-Framework`)}><Layers size={16}/> flOW Modulith <ExternalLink size={12}/></button></div><div className="tool-note">{toolchain.build_note||'The bundled OW compiler will be staged during installer builds.'}</div></>}
    </aside>}
-   <main className="work-area"><div className="editor-surface" style={{flex:maxTerminal?'0 0 0':'1 1 auto',minHeight:maxTerminal?0:120,overflow:'hidden'}}><EditorPane tabs={tabs} active={active} onActivate={setActive} onClose={closeFile} onChange={changeFile} onSave={()=>void saveAll()} onRun={()=>void runOw('run')} diagnostics={problems} jump={jump}/></div>
-    {terminalVisible&&<div className={`bottom-panel ${maxTerminal?'maximized':''}`}>
+   {sidebarVisible&&<div className="v-resizer" title="Drag to resize · double-click to reset" onMouseDown={startSidebarDrag} onDoubleClick={()=>{setSidebarWidth(255);localStorage.setItem('owler:sidebar-width','255')}}/>}
+   <main className="work-area"><div className="editor-surface" style={{flex:maxTerminal?'0 0 0':'1 1 auto',minHeight:maxTerminal?0:120,overflow:'hidden'}}><EditorPane tabs={tabs} active={active} onActivate={setActive} onClose={closeFile} onChange={changeFile} onSave={()=>void saveAll()} onRun={()=>void runOw('run')} diagnostics={problems} jump={jump} settings={settings}/></div>
+    {terminalVisible&&!maxTerminal&&<div className="h-resizer" title="Drag to resize · double-click to reset" onMouseDown={startPanelDrag} onDoubleClick={()=>{setPanelHeight(268);localStorage.setItem('owler:panel-height','268')}}/>}
+    {terminalVisible&&<div className={`bottom-panel ${maxTerminal?'maximized':''}`} style={maxTerminal?undefined:{height:panelHeight,minHeight:120}}>
      <div className="owler-panel-tabs"><button className={panelMode==='terminal'?'selected':''} onClick={()=>setPanelMode('terminal')}><TerminalSquare size={13}/> Terminal</button><button className={panelMode==='problems'?'selected':''} onClick={()=>setPanelMode('problems')}><ShieldCheck size={13}/> Problems <span>{problems.length}</span></button><button className={panelMode==='preview'?'selected':''} onClick={()=>setPanelMode('preview')}><Globe size={13}/> Web preview</button><span className="owler-panel-spacer"/><button onClick={()=>setTerminalVisible(false)} title="Close panel"><X size={14}/></button></div>
      <div className="owler-panel-content" style={{display:panelMode==='terminal'?'block':'none'}}><TerminalPanel sessions={sessions} onNew={startSession} onRemove={id=>setSessions(ts=>ts.filter(s=>s.id!==id))} onHide={()=>setTerminalVisible(false)} onToggleSize={()=>setMaxTerminal(v=>!v)} maximized={maxTerminal}/></div>
      {panelMode==='problems'&&<div className="owler-problems">{problems.length?problems.map((d,i)=><button key={i} onClick={()=>void navigateProblem(d)}><span className="problem-error">●</span><b>{d.message}</b><small>{d.file}:{d.line}:{d.column}</small></button>):<div className="owler-no-problems"><ShieldCheck size={19}/> No compiler errors reported. Run <b>Check</b> to validate the active OW file.</div>}</div>}
@@ -285,14 +473,62 @@ export default function App(){
    </main>
    <div className="right-rail"><button title="New project" onClick={()=>setShowNewProject(true)}><Plus size={19}/></button><button title="GitHub repository" onClick={()=>void openUrl(org)}><GitPullRequest size={19}/></button><span className="right-rail-spacer"/><button title="OW docs" onClick={()=>void openUrl(`${org}/owdocs`)}><BookOpen size={19}/></button></div>
   </div>
-  <div className="statusbar"><div className="status-left"><button onClick={()=>{setSection('git');setSidebarVisible(true)}}><GitBranch size={13}/>{git.branch||'No Git'}</button><span className="status-counter">{git.changes.length?`${git.changes.length} modified`:'✓'}</span><button onClick={()=>{setSection('tools');setSidebarVisible(true)}}><ShieldCheck size={13}/>{toolchain.available?'Toolchain ready':'Setup OW'}</button></div><div className="status-right"><span>{active?'UTF-8':'Owler IDE'}</span><span>Spaces: 2</span><span className="status-language"><span className="small-ow">ow</span> {active?active.split('.').pop()?.toUpperCase():'OW'}</span><span className="status-live"><Activity size={12}/> v0.1.0</span></div></div>
+  <div className="statusbar"><div className="status-left"><button onClick={()=>{setSection('git');setSidebarVisible(true)}}><GitBranch size={13}/>{git.branch||'No Git'}</button><span className="status-counter">{git.changes.length?`${git.changes.length} modified`:'✓'}</span><button onClick={()=>{setSection('tools');setSidebarVisible(true)}}><ShieldCheck size={13}/>{toolchain.available?'Toolchain ready':'Setup OW'}</button></div><div className="status-right"><span>{active?'UTF-8':'Owler IDE'}</span><span>Spaces: 2</span><span className="status-language"><span className="small-ow">ow</span> {active?active.split('.').pop()?.toUpperCase():'OW'}</span><button className="status-live" title="Check for updates" onClick={()=>void checkForUpdates()}><Activity size={12}/> v0.1.0</button></div></div>
   {palette&&<div className="overlay" onMouseDown={()=>setPalette(false)}><div className="palette" onMouseDown={e=>e.stopPropagation()}><div className="palette-search"><Command size={20}/><input autoFocus value={paletteQuery} onChange={e=>setPaletteQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&visiblePalette.length){visiblePalette[0].run();setPalette(false)}else if(e.key==='Escape')setPalette(false)}} placeholder="Search files and commands…"/><kbd>ESC</kbd></div><div className="palette-body"><p>COMMANDS & FILES</p>{visiblePalette.map((item,i)=><button key={i} onClick={()=>{item.run();setPalette(false)}}><span>{item.name}</span><small>{item.hint}</small></button>)}</div><div className="palette-footer">↵ to select <span>·</span> ESC to close <span>·</span> OWLER COMMANDS</div></div></div>}
   {showNewProject&&<div className="overlay" onMouseDown={()=>setShowNewProject(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Box size={21}/></span><button onClick={()=>setShowNewProject(false)}><X size={19}/></button></div><h2>Create a new OW project</h2><p>Pick a starter. Owler will create the source files and initialize Git.</p><label>PROJECT NAME</label><input className="dialog-input" value={newProject.name} onChange={e=>setNewProject(p=>({...p,name:e.target.value}))} placeholder="my-awesome-app"/><label>PROJECT TEMPLATE</label><div className="template-list">{([['console','Console application','A clean OW entry point with a typed function.',TerminalSquare],['web','Night web app','A REST API, JSON routes and persistent model.',Globe],['ui','OW interactive UI','Build a clickable OW user interface.',Layers]] as const).map(([key,title,description,I])=><button key={key} className={newProject.kind===key?'selected':''} onClick={()=>setNewProject(v=>({...v,kind:key}))}><span className="template-icon"><I size={20}/></span><span><b>{title}</b><small>{description}</small></span><span className="radio-dot"/></button>)}</div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowNewProject(false)}>Cancel</button><button className="primary" onClick={()=>void createProject()}><Plus size={17}/> Create project</button></div></div></div>}
   {showPublish&&<div className="overlay" onMouseDown={()=>setShowPublish(false)}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Cloud size={21}/></span><button onClick={()=>setShowPublish(false)}><X size={19}/></button></div><h2>Publish to OW GitHub</h2><p>Create a new repository under <b>OW-Programing-Language</b> and push your commits using the GitHub CLI (<code>gh auth login</code>). No token is stored in Owler.</p><label>REPOSITORY NAME</label><input className="dialog-input" value={publishName} onChange={e=>setPublishName(e.target.value)} placeholder="my-ow-app"/><label>DESCRIPTION</label><input className="dialog-input" value={publishDescription} onChange={e=>setPublishDescription(e.target.value)}/><label>VISIBILITY</label><div className="publish-visibility"><button className={publishVisibility==='public'?'selected':''} onClick={()=>setPublishVisibility('public')}>Public</button><button className={publishVisibility==='private'?'selected':''} onClick={()=>setPublishVisibility('private')}>Private</button></div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowPublish(false)}>Cancel</button><button className="primary" disabled={!publishName} onClick={()=>void publishToGitHub()}><UploadCloud size={17}/> Create and push</button></div></div></div>}
   {diffPreview&&<div className="overlay" onMouseDown={()=>setDiffPreview(null)}><div className="owler-diff-dialog" onMouseDown={e=>e.stopPropagation()}><div className="owler-diff-header"><FileCode2 size={17}/><b>Git diff · {diffPreview.path}</b><button onClick={()=>setDiffPreview(null)}><X size={16}/></button></div><pre>{diffPreview.content}</pre></div></div>}
   {showCreatePr&&<div className="overlay" onMouseDown={()=>setShowCreatePr(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><GitPullRequest size={19}/></span><button onClick={()=>setShowCreatePr(false)}><X size={18}/></button></div><h2>Create GitHub pull request</h2><p>Push your branch first. Owler uses your signed-in GitHub CLI.</p><label>TITLE</label><input className="dialog-input" value={prTitle} onChange={e=>setPrTitle(e.target.value)} placeholder="feat: implement OW feature"/><label>BASE BRANCH</label><input className="dialog-input" value={prBase} onChange={e=>setPrBase(e.target.value)}/><label>DESCRIPTION</label><textarea className="dialog-input" rows={5} value={prBody} onChange={e=>setPrBody(e.target.value)}/><div className="dialog-actions"><button className="cancel" onClick={()=>setShowCreatePr(false)}>Cancel</button><button className="primary" disabled={!prTitle.trim()} onClick={()=>void createPullRequest()}><GitPullRequest size={16}/> Create PR</button></div></div></div>}
   {showClone&&<div className="overlay" onMouseDown={()=>setShowClone(false)}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><GitBranch size={21}/></span><button onClick={()=>setShowClone(false)}><X size={19}/></button></div><h2>Clone from GitHub</h2><p>Use HTTPS or SSH. Git authentication is handled by your local Git credential manager or SSH keys.</p><label>REPOSITORY URL</label><input className="dialog-input" value={cloneUrl} onChange={e=>setCloneUrl(e.target.value)} placeholder="https://github.com/OW-Programing-Language/ow-lang.git"/><div className="dialog-actions"><button className="cancel" onClick={()=>setShowClone(false)}>Cancel</button><button className="primary" disabled={!cloneUrl} onClick={()=>void cloneProject()}><Download size={17}/> Clone repository</button></div></div></div>}
+  {showConnect&&<div className="overlay" onMouseDown={()=>setShowConnect(false)}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><KeyRound size={21}/></span><button onClick={()=>setShowConnect(false)}><X size={19}/></button></div><h2>Connect to GitHub</h2><p>Paste a <b>personal access token</b> with the <code>repo</code> scope (plus <code>admin:org</code> if you manage org repos). Owler hands it to the GitHub CLI, which stores it securely and uses it for push, pull and collaborator management. The token is never written to disk by Owler.{!githubAuth.cli_available&&<><br/><b>GitHub CLI (gh) is not installed.</b> Install it from cli.github.com first.</>}</p><label>PERSONAL ACCESS TOKEN</label><input className="dialog-input" type="password" autoFocus value={token} onChange={e=>setToken(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void connectToken()}} placeholder="ghp_… or github_pat_…"/><p className="dialog-hint"><button className="linkish" onClick={()=>void openUrl('https://github.com/settings/tokens/new?scopes=repo&description=Owler%20IDE')}>Create a token on GitHub <ExternalLink size={11}/></button></p><div className="dialog-actions"><button className="cancel" onClick={()=>setShowConnect(false)}>Cancel</button><button className="primary" disabled={!token.trim()||connectBusy} onClick={()=>void connectToken()}>{connectBusy?<Loader2 size={16} className="spin"/>:<KeyRound size={16}/>} Connect</button></div></div></div>}
+  {showCollaborators&&<div className="overlay" onMouseDown={()=>setShowCollaborators(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Users size={21}/></span><button onClick={()=>setShowCollaborators(false)}><X size={19}/></button></div><h2>Manage collaborators</h2><p>Add or remove people on the <b>origin</b> GitHub repository. New collaborators receive an invitation they must accept.</p>
+   <div className="collab-add"><input className="dialog-input" value={collabName} onChange={e=>setCollabName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void addCollaborator()}} placeholder="github-username"/><select value={collabPerm} onChange={e=>setCollabPerm(e.target.value)}>{COLLAB_PERMISSIONS.map(p=><option key={p} value={p}>{p}</option>)}</select><button className="primary" disabled={!collabName.trim()||collabBusy} onClick={()=>void addCollaborator()}><UserPlus size={15}/> Add</button></div>
+   <div className="sidebar-section-heading">CURRENT COLLABORATORS <button title="Refresh" onClick={()=>void refreshCollaborators()}><RefreshCw size={12}/></button></div>
+   <div className="collab-list">{collaborators.map(c=><div className="collab-row" key={c.login}>{c.avatarUrl?<img src={c.avatarUrl} alt=""/>:<span className="collab-avatar"><Users size={14}/></span>}<span className="collab-ident" onClick={()=>void openUrl(c.htmlUrl)}><b>{c.login}</b><small>{c.permission||'collaborator'}</small></span><button title={`Remove ${c.login}`} disabled={collabBusy} onClick={()=>void removeCollaborator(c.login)}><UserMinus size={15}/></button></div>)}{collaborators.length===0&&!collabError&&<div className="subtle-message">No collaborators found yet.</div>}{collabError&&<p className="collab-error">{collabError}</p>}</div>
+   <div className="dialog-actions"><button className="cancel" onClick={()=>setShowCollaborators(false)}>Close</button></div></div></div>}
+  {showUpdate&&<div className="overlay" onMouseDown={()=>{if(updateState!=='downloading')setShowUpdate(false)}}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Download size={21}/></span>{updateState!=='downloading'&&<button onClick={()=>setShowUpdate(false)}><X size={19}/></button>}</div>
+   <h2>Software update</h2>
+   {updateState==='checking'&&<p><Loader2 size={14} className="spin"/> Checking for a newer version of Owler IDE…</p>}
+   {updateState==='current'&&<p>You're up to date — Owler IDE <b>v0.1.0</b> is the latest version.</p>}
+   {updateState==='available'&&updateInfo&&<><p>A new version <b>v{updateInfo.version}</b> is available (you have v0.1.0). Installing replaces your current version automatically and restarts the IDE.</p>{updateInfo.notes&&<pre className="update-notes">{updateInfo.notes.slice(0,1200)}</pre>}</>}
+   {updateState==='downloading'&&<><p>Downloading and installing v{updateInfo?.version}… Owler will restart when it finishes.</p><div className="update-bar"><div style={{width:`${updateProgress}%`}}/></div><div className="update-pct">{updateProgress}%</div></>}
+   {updateState==='error'&&<p className="collab-error">Update failed: {updateError}</p>}
+   <div className="dialog-actions">{updateState!=='downloading'&&<button className="cancel" onClick={()=>setShowUpdate(false)}>Close</button>}{updateState==='available'&&<button className="primary" onClick={()=>void installUpdate()}><Download size={16}/> Install and restart</button>}{updateState==='error'&&<button className="primary" onClick={()=>void checkForUpdates()}><RefreshCw size={15}/> Retry</button>}</div></div></div>}
   {!workspace&&<div className="welcome-float"><div className="welcome-line">START BUILDING WITH OW</div><div className="welcome-buttons"><button onClick={()=>setShowNewProject(true)}><Plus size={15}/> New project</button><button onClick={()=>void pickOpen()}><FolderOpen size={15}/> Open folder</button><button onClick={()=>setShowClone(true)}><GitBranch size={15}/> Clone repo</button></div></div>}
+  {showSettings&&<div className="overlay" onMouseDown={()=>setShowSettings(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Settings2 size={21}/></span><button onClick={()=>setShowSettings(false)}><X size={19}/></button></div><h2>Preferences</h2><p>Editor settings apply instantly and are saved on this machine.</p>
+   <div className="settings-row"><div><b>Font size</b><small>Editor text size in pixels</small></div><div className="settings-stepper"><button onClick={()=>updateSetting('fontSize',Math.max(10,settings.fontSize-1))}>−</button><span>{settings.fontSize}</span><button onClick={()=>updateSetting('fontSize',Math.min(24,settings.fontSize+1))}>+</button></div></div>
+   <div className="settings-row"><div><b>Tab size</b><small>Spaces per indentation level</small></div><div className="settings-seg">{[2,4,8].map(n=><button key={n} className={settings.tabSize===n?'on':''} onClick={()=>updateSetting('tabSize',n)}>{n}</button>)}</div></div>
+   <div className="settings-row"><div><b>Word wrap</b><small>Wrap long lines in the editor</small></div><button className={`settings-toggle ${settings.wordWrap?'on':''}`} onClick={()=>updateSetting('wordWrap',!settings.wordWrap)}><span/></button></div>
+   <div className="settings-row"><div><b>Minimap</b><small>Show the code overview on the right</small></div><button className={`settings-toggle ${settings.minimap?'on':''}`} onClick={()=>updateSetting('minimap',!settings.minimap)}><span/></button></div>
+   <div className="settings-row"><div><b>Discord Rich Presence</b><small>Show “Playing OWler IDE · Editing &lt;file&gt;” on your Discord profile</small></div><button className={`settings-toggle ${settings.discord!==false?'on':''}`} onClick={()=>updateSetting('discord',settings.discord===false)}><span/></button></div>
+   <div className="dialog-actions"><button className="cancel" onClick={()=>{const d={fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true};setSettings(d);localStorage.setItem('owler:settings',JSON.stringify(d))}}>Reset defaults</button><button className="primary" onClick={()=>setShowSettings(false)}>Done</button></div></div></div>}
+  {ctxMenu&&(()=>{const n=ctxMenu.node;const isRoot=isRootNode(n);const namespacedRoot=/^@\d+$/.test(n.path);const close=()=>setCtxMenu(null);const run=(f:()=>void)=>{close();f()};const staged=!n.directory;return <div className="ctx-overlay" onMouseDown={close} onContextMenu={e=>{e.preventDefault();close()}}><div className="ctx-menu" style={{left:Math.min(ctxMenu.x,window.innerWidth-220),top:Math.min(ctxMenu.y,window.innerHeight-430)}} onMouseDown={e=>e.stopPropagation()}>
+   {isRoot&&<div className="ctx-title">{n.name||basename}{roots.length>1&&!namespacedRoot?' · primary':''}</div>}
+   {isRoot&&<button onClick={()=>run(()=>void addFolder())}><FolderPlus size={14}/> Add folder to workspace…</button>}
+   {namespacedRoot&&<button onClick={()=>run(()=>void makePrimaryFolder(rootAbs(n.path)))}><Play size={13}/> Set as primary folder</button>}
+   {isRoot&&roots.length>1&&<button className="ctx-danger" onClick={()=>run(()=>void removeFolder(rootAbs(n.path)))}><X size={14}/> Remove folder from workspace</button>}
+   {isRoot&&<div className="ctx-sep"/>}
+   {!n.directory&&<button onClick={()=>run(()=>void openFile(n.path))}><FileCode2 size={14}/> Open</button>}
+   {!n.directory&&isOw(n.path)&&(n.path===mainEntry?<button onClick={()=>run(clearMain)}><Play size={13} fill="currentColor"/> Clear main entry</button>:<button onClick={()=>run(()=>setAsMain(n))}><Play size={13}/> Set as main entry</button>)}
+   <button onClick={()=>run(()=>void newEntryIn(n,false))}><FilePlus size={14}/> New file…</button>
+   <button onClick={()=>run(()=>void quickCreate(n,'ow','main.ow'))}><span className="ctx-ext ow">ow</span> New OW file</button>
+   <button onClick={()=>run(()=>void quickCreate(n,'md','README.md'))}><span className="ctx-ext">md</span> New Markdown file</button>
+   <button onClick={()=>run(()=>void quickCreate(n,'txt','notes.txt'))}><span className="ctx-ext">txt</span> New text file</button>
+   <button onClick={()=>run(()=>void newEntryIn(n,true))}><FolderPlus size={14}/> New folder…</button>
+   <div className="ctx-sep"/>
+   {!isRoot&&<><button onClick={()=>run(()=>setClipboard({node:n,mode:'cut'}))}><Scissors size={14}/> Cut</button>
+   <button onClick={()=>run(()=>setClipboard({node:n,mode:'copy'}))}><Copy size={14}/> Copy</button></>}
+   <button disabled={!clipboard} onClick={()=>run(()=>void pasteInto(n))}><ClipboardPaste size={14}/> Paste{clipboard?` “${fileName(clipboard.node.path)}”`:''}</button>
+   <div className="ctx-sep"/>
+   {!isRoot&&<><button onClick={()=>run(()=>void navigator.clipboard.writeText(absOf(n.path).replace(/\//g,'\\')))}><Copy size={14}/> Copy path</button>
+   <button onClick={()=>run(()=>void navigator.clipboard.writeText(n.path))}><Copy size={14}/> Copy relative path</button></>}
+   <button onClick={()=>run(()=>revealEntry(n))}><FolderOpen size={14}/> Reveal in File Explorer</button>
+   {staged&&<><div className="ctx-sep"/><button onClick={()=>run(()=>void gitAction('stage',undefined,n.path))}><Plus size={14}/> Git: Stage</button>
+   <button onClick={()=>run(()=>void gitAction('unstage',undefined,n.path))}><GitBranch size={14}/> Git: Unstage</button></>}
+   {!isRoot&&<><div className="ctx-sep"/>
+   <button onClick={()=>run(()=>void renameNode(n))}><Pencil size={14}/> Rename…</button>
+   <button className="ctx-danger" onClick={()=>run(()=>void deleteNode(n))}><Trash2 size={14}/> Delete</button></>}
+  </div></div>})()}
   <div className="toast-stack">{toasts.map(t=><div className={`toast ${t.error?'error':''}`} key={t.id}><span className="toast-symbol">{t.error?'!':'✓'}</span>{t.message}<button onClick={()=>setToasts(v=>v.filter(x=>x.id!==t.id))}><X size={12}/></button></div>)}</div>
   {!isDesktop&&<div className="preview-banner">UI PREVIEW — Native file access, Git, OW compiling and AI terminals require the Tauri desktop app. <code>npm run desktop</code></div>}
  </div>

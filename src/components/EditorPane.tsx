@@ -1,13 +1,29 @@
 import Editor,{type OnMount} from '@monaco-editor/react';
-import {useCallback,useEffect,useMemo,useRef} from 'react';
-import {Code2,FileCode2,X,Play,Save,Braces} from 'lucide-react';
+import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
+import {Code2,FileCode2,X,Play,Save,Braces,Eye,Pencil} from 'lucide-react';
+import {marked} from 'marked';
 import type * as monaco from 'monaco-editor';
 import {registerOwLanguage} from '../lib/owLanguage';
 import {fileLanguage,fileName,type Tab,type OwDiagnostic} from '../lib/api';
 
-type Props={tabs:Tab[];active:string;onActivate:(path:string)=>void;onClose:(path:string)=>void;onChange:(path:string,content:string)=>void;onSave:()=>void;onRun:()=>void;diagnostics:OwDiagnostic[];jump:{path:string;line:number;column:number;nonce:number}|null};
-export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSave,onRun,diagnostics,jump}:Props){
+export type EditorSettings={fontSize:number;tabSize:number;wordWrap:boolean;minimap:boolean};
+type Props={tabs:Tab[];active:string;onActivate:(path:string)=>void;onClose:(path:string)=>void;onChange:(path:string,content:string)=>void;onSave:()=>void;onRun:()=>void;diagnostics:OwDiagnostic[];jump:{path:string;line:number;column:number;nonce:number}|null;settings:EditorSettings};
+export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSave,onRun,diagnostics,jump,settings}:Props){
  const current=tabs.find(t=>t.path===active);
+ const isMarkdown=!!current&&/\.(md|markdown)$/i.test(current.path);
+ const [preview,setPreview]=useState(true);
+ // Default to reading mode each time a different markdown file becomes active.
+ useEffect(()=>{setPreview(true)},[active]);
+ // Render Markdown, then neutralise any raw HTML a .md file may embed so the
+ // reader can't execute scripts/handlers inside the webview.
+ const html=useMemo(()=>{
+  if(!(isMarkdown&&preview))return '';
+  const raw=marked.parse(current!.content,{async:false,breaks:true}) as string;
+  return raw
+   .replace(/<\/?(script|style|iframe|object|embed|link|meta|base|form|input)\b[^>]*>/gi,'')
+   .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi,'')
+   .replace(/(href|src)\s*=\s*(["']?)\s*javascript:[^"'>\s]*/gi,'$1=$2#');
+ },[isMarkdown,preview,current]);
  const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
  const monacoRef=useRef<typeof import('monaco-editor')|null>(null);
  useEffect(()=>{
@@ -39,19 +55,20 @@ export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSa
  },[onSave,onRun,diagnostics,active]);
  const opts=useMemo<monaco.editor.IStandaloneEditorConstructionOptions>(()=>({
   fontFamily:"'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
-  fontSize:13,fontLigatures:true,lineHeight:23,wordWrap:'off',minimap:{enabled:true,scale:0.72,renderCharacters:false,side:'right'},
+  fontSize:settings.fontSize,fontLigatures:true,lineHeight:Math.round(settings.fontSize*1.77),wordWrap:settings.wordWrap?'on':'off',minimap:{enabled:settings.minimap,scale:0.72,renderCharacters:false,side:'right'},
   glyphMargin:true,folding:true,foldingStrategy:'indentation',bracketPairColorization:{enabled:true},guides:{bracketPairs:true,indentation:true},
   renderLineHighlight:'line',smoothScrolling:true,cursorBlinking:'smooth',cursorSmoothCaretAnimation:'on',scrollBeyondLastLine:false,
   automaticLayout:true,padding:{top:22,bottom:20},quickSuggestions:{other:true,strings:false,comments:false},
-  suggestOnTriggerCharacters:true,tabSize:2,insertSpaces:true,renderWhitespace:'selection',formatOnPaste:false,
+  suggestOnTriggerCharacters:true,tabSize:settings.tabSize,insertSpaces:true,renderWhitespace:'selection',formatOnPaste:false,
   overviewRulerBorder:false,stickyScroll:{enabled:true},wordBasedSuggestions:'currentDocument'
- }),[]);
+ }),[settings]);
  return <div className="editor-column">
   <div className="editor-tabs">{tabs.map(tab=><div key={tab.path} className={`editor-tab ${tab.path===active?'active':''}`} onClick={()=>onActivate(tab.path)}><FileCode2 size={14} className={tab.path.endsWith('.ow')?'ow-file':''}/><span>{fileName(tab.path)}</span>{tab.content!==tab.saved&&<span className="dirty-dot"/>}<span className="tab-close" onClick={e=>{e.stopPropagation();onClose(tab.path)}}><X size={13}/></span></div>)}
     <div className="editor-tabs-fill"/>
+    {isMarkdown&&<button className={`tab-action ${preview?'active':''}`} title={preview?'Edit Markdown':'Preview Markdown'} onClick={()=>setPreview(p=>!p)}>{preview?<Pencil size={14}/>:<Eye size={15}/>}</button>}
     {current&&<><button className="tab-action" title="Save file (Ctrl+S)" onClick={onSave}><Save size={15}/></button><button className="tab-action run" title="Run OW (F5)" onClick={onRun}><Play size={14}/></button></>}
   </div>
-  {current? <><div className="editor-breadcrumb"><Code2 size={13}/><span>{current.path.split('/').join('  /  ')}</span><span className="editor-breadcrumb-type"><Braces size={13}/>{fileLanguage(current.path).toUpperCase()}</span></div><div className="monaco-wrapper"><Editor key={current.path} theme="owler-midnight" language={fileLanguage(current.path)} path={current.path} value={current.content} onMount={onMount} beforeMount={registerOwLanguage} onChange={v=>onChange(current.path,v??'')} options={opts} loading={<div className="editor-loading">Loading editor…</div>}/></div></>:
+  {current? <><div className="editor-breadcrumb"><Code2 size={13}/><span>{current.path.split('/').join('  /  ')}</span><span className="editor-breadcrumb-type"><Braces size={13}/>{isMarkdown&&preview?'MARKDOWN PREVIEW':fileLanguage(current.path).toUpperCase()}</span></div>{isMarkdown&&preview?<div className="markdown-preview"><div className="markdown-body" dangerouslySetInnerHTML={{__html:html}}/></div>:<div className="monaco-wrapper"><Editor key={current.path} theme="owler-midnight" language={fileLanguage(current.path)} path={current.path} value={current.content} onMount={onMount} beforeMount={registerOwLanguage} onChange={v=>onChange(current.path,v??'')} options={opts} loading={<div className="editor-loading">Loading editor…</div>}/></div>}</>:
   <div className="editor-placeholder"><div className="hero-glyph"><span>O</span><span>W</span></div><p>THE NATIVE DEVELOPMENT ENVIRONMENT</p><h2>Make something <em>remarkable.</em></h2><div className="placeholder-keys"><div><kbd>Ctrl</kbd> + <kbd>P</kbd> <span>Quick open a file</span></div><div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> <span>Command palette</span></div><div><kbd>F5</kbd><span>Run your OW project</span></div><div><kbd>Ctrl</kbd> + <kbd>`</kbd><span>Toggle terminal</span></div></div><div className="placeholder-foot">OW LANGUAGE <span>·</span> NIGHT FRAMEWORK <span>·</span> FLOW MODULITH</div></div>}
  </div>;
 }

@@ -26,6 +26,26 @@ Owler is intended to be a real, distributable OW development environment. A sour
 - [ ] Claude Code and Codex sessions launch if installed, display ANSI output, accept input and stop cleanly.
 - [ ] No API tokens are embedded in the bundle or persisted by Owler.
 
+## Shipping an auto-update (in-app "Check for updates")
+
+Owler checks `https://github.com/OW-Programing-Language/OWler-IDE/releases/latest/download/latest.json`
+and installs signed NSIS updates in place (old version replaced, app relaunched).
+
+One-time setup (already done): a minisign keypair was generated at `~/.owler-updater.key`
+(+ `.pub`). The **public** key is embedded in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`).
+The **private** key must be kept secret — store it as the CI secret `TAURI_SIGNING_PRIVATE_KEY`
+(and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if set). Losing it breaks all future updates.
+
+Per release:
+- [ ] Bump `version` in `src-tauri/tauri.conf.json` **and** `package.json`.
+- [ ] Signed build: `TAURI_SIGNING_PRIVATE_KEY=~/.owler-updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD= npm run tauri -- build`
+      (produces `…_x64-setup.exe` and its `.sig`).
+- [ ] `npm run make-latest -- "release notes"` to generate `latest.json`.
+- [ ] Publish a GitHub release tagged `v<version>` with the setup.exe **and** latest.json attached
+      (the `gh release create …` command is printed by make-latest).
+- [ ] From an older installed build, confirm the status-bar version button / Tools → Check for updates
+      finds the new version, installs, and relaunches.
+
 ## Currently not verified
 
 No Windows, macOS or Linux installer was compiled or manually exercised in this session: the working environment lacks Rust/Cargo and cannot resolve package-registry hosts. Completing CI and VM testing is mandatory before calling this a production release. The GitHub repository must first exist under `OW-Programing-Language` for Actions to run.

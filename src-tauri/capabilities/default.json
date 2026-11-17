@@ -3,5 +3,5 @@
   "identifier":"default",
   "description":"Owler desktop window with a local file picker and external links",
   "windows":["main"],
-  "permissions":["core:default","dialog:default","opener:default"]
+  "permissions":["core:default","dialog:default","opener:default","updater:default","process:default"]
 }

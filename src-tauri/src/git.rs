@@ -27,10 +27,28 @@ pub fn git_status(state:State<'_,AppState>)->Result<GitSnapshot,String>{
  Ok(GitSnapshot{branch,remote,changes,last_commits,initialized:true})
 }
 
+#[derive(Serialize)]
+pub struct BranchList {pub current:String,pub branches:Vec<String>}
+/// Structured branch listing so the UI can render a switcher that highlights the
+/// checked-out branch without having to parse porcelain output itself.
+#[tauri::command]
+pub fn git_branches(state:State<'_,AppState>)->Result<BranchList,String>{
+ let root=workspace::root(&state)?;
+ let current=cmd(&root,&["branch","--show-current"]).unwrap_or_default();
+ let raw=cmd(&root,&["branch","--list","--format=%(refname:short)"]).unwrap_or_default();
+ let branches=raw.lines().map(|l|l.trim().to_string()).filter(|l|!l.is_empty()).collect();
+ Ok(BranchList{current,branches})
+}
+
 #[tauri::command]
 pub fn git_action(action:String,message:Option<String>,file:Option<String>,state:State<'_,AppState>)->Result<String,String>{
- let root=workspace::root(&state)?;
- let path=file.as_deref().unwrap_or("");
+ // A namespaced file (from a non-primary workspace root) is staged/diffed in
+ // its own repository; everything else targets the active root.
+ let (root,path)=match file.as_deref(){
+  Some(f) if f.starts_with('@')=>{let (r,rel)=workspace::resolve(&state,f)?;(r,rel)},
+  other=>(workspace::root(&state)?,other.unwrap_or("").to_string()),
+ };
+ let path=path.as_str();
  // Restrict each UI action to an explicit git subcommand (never invoke a shell).
  match action.as_str(){
  "init"=>cmd(&root,&["init","-b","main"]),
@@ -121,4 +139,124 @@ pub fn github_pr_create(title:String,body:String,base:String,state:State<'_,AppS
  if base.trim().is_empty()||base.starts_with('-')||base.contains(' ')||base.len()>120{return Err("Invalid base branch".into())}
  if body.len()>100_000{return Err("PR description is too long".into())}
  gh(&root,&["pr","create","--base",&base,"--title",title.trim(),"--body",&body])
+}
+
+
+/// Parse the `owner/repo` slug from the origin remote so GitHub API calls can
+/// target the current project. Supports HTTPS and SSH GitHub URLs.
+fn origin_slug(root:&Path)->Result<String,String>{
+ let url=cmd(root,&["remote","get-url","origin"]).map_err(|_|"No 'origin' remote is configured. Set a GitHub remote first.".to_string())?;
+ let rest=url.trim().trim_end_matches(".git");
+ let slug=rest.strip_prefix("https://github.com/")
+  .or_else(||rest.strip_prefix("git@github.com:"))
+  .or_else(||rest.strip_prefix("ssh://git@github.com/"))
+  .ok_or("The origin remote is not a GitHub repository.")?;
+ let parts:Vec<&str>=slug.split('/').filter(|s|!s.is_empty()).collect();
+ if parts.len()!=2{return Err("Could not read owner/repository from the GitHub remote.".into())}
+ Ok(format!("{}/{}",parts[0],parts[1]))
+}
+
+fn valid_login(s:&str)->bool{
+ !s.is_empty()&&s.len()<=39&&s.chars().all(|c|c.is_ascii_alphanumeric()||c=='-')&&!s.starts_with('-')
+}
+
+/// Reports whether the local GitHub CLI holds a usable credential and, if so,
+/// which account it belongs to. Used to show connection state in the UI.
+#[derive(Serialize)]
+pub struct GithubAuth {pub connected:bool,pub user:String,pub cli_available:bool}
+#[tauri::command]
+pub fn github_auth_status()->GithubAuth{
+ let probe=Command::new("gh").args(["auth","status"]).output();
+ let cli_available=probe.is_ok();
+ let user=Command::new("gh").args(["api","user","--jq",".login"]).output()
+  .ok().filter(|o|o.status.success())
+  .map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string())
+  .unwrap_or_default();
+ GithubAuth{connected:!user.is_empty(),user,cli_available}
+}
+
+/// Connect to GitHub with a personal access token. The token is handed to the
+/// GitHub CLI over stdin (never written to disk by Owler, never logged) and gh
+/// is configured as the Git credential helper so push/pull work over HTTPS.
+#[tauri::command]
+pub fn github_token_login(token:String)->Result<String,String>{
+ use std::io::Write;
+ let token=token.trim().to_string();
+ if token.is_empty(){return Err("Paste a GitHub personal access token.".into())}
+ if !token.chars().all(|c|c.is_ascii_graphic()){return Err("The token contains unexpected characters.".into())}
+ let mut child=Command::new("gh").args(["auth","login","--with-token"])
+  .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+  .spawn().map_err(|e|format!("GitHub CLI is required to connect with a token: {e}. Install gh from cli.github.com."))?;
+ child.stdin.take().ok_or("Could not pass the token to gh")?.write_all(token.as_bytes()).map_err(|e|e.to_string())?;
+ let out=child.wait_with_output().map_err(|e|e.to_string())?;
+ if !out.status.success(){
+  let err=String::from_utf8_lossy(&out.stderr).trim().to_string();
+  return Err(if err.is_empty(){"GitHub rejected the token. Check that it has 'repo' scope and has not expired.".into()}else{err});
+ }
+ // Route Git HTTPS operations through the stored gh credential.
+ let _=Command::new("gh").args(["auth","setup-git"]).output();
+ let user=Command::new("gh").args(["api","user","--jq",".login"]).output()
+  .ok().map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+ Ok(if user.is_empty(){"Connected to GitHub.".into()}else{format!("Connected to GitHub as {user}.")})
+}
+
+/// Disconnect: drop the token from the GitHub CLI keyring.
+#[tauri::command]
+pub fn github_logout()->Result<String,String>{
+ let out=Command::new("gh").args(["auth","logout","--hostname","github.com"]).output()
+  .map_err(|e|format!("GitHub CLI not available: {e}"))?;
+ if !out.status.success(){return Err(String::from_utf8_lossy(&out.stderr).trim().to_string())}
+ Ok("Disconnected from GitHub.".into())
+}
+
+#[derive(Serialize,serde::Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct Collaborator {pub login:String,pub permission:String,pub avatar_url:String,pub html_url:String}
+/// List the collaborators on the origin repository via the GitHub API.
+#[tauri::command]
+pub fn github_collaborators(state:State<'_,AppState>)->Result<Vec<Collaborator>,String>{
+ let root=workspace::root(&state)?;
+ let slug=origin_slug(&root)?;
+ let data=gh(&root,&["api",&format!("repos/{slug}/collaborators"),"--paginate",
+  "--jq",".[]|{login:.login,permission:(.role_name//\"\"),avatarUrl:.avatar_url,htmlUrl:.html_url}"])?;
+ // gh --jq streams one JSON object per line; wrap into an array for serde.
+ let collaborators=data.lines().filter(|l|!l.trim().is_empty())
+  .map(|l|serde_json::from_str::<Collaborator>(l)).collect::<Result<Vec<_>,_>>()
+  .map_err(|e|format!("Could not parse collaborators: {e}"))?;
+ Ok(collaborators)
+}
+
+const PERMISSIONS:[&str;5]=["pull","triage","push","maintain","admin"];
+/// Invite a collaborator (or update their permission) on the origin repository.
+#[tauri::command]
+pub fn github_collaborator_add(username:String,permission:String,state:State<'_,AppState>)->Result<String,String>{
+ let root=workspace::root(&state)?;
+ let slug=origin_slug(&root)?;
+ let username=username.trim();
+ if !valid_login(username){return Err("Enter a valid GitHub username.".into())}
+ if !PERMISSIONS.contains(&permission.as_str()){return Err("Choose a permission: pull, triage, push, maintain or admin.".into())}
+ gh(&root,&["api","-X","PUT",&format!("repos/{slug}/collaborators/{username}"),"-f",&format!("permission={permission}")])?;
+ Ok(format!("Invited {username} with {permission} access. They must accept the invitation on GitHub."))
+}
+
+/// Remove a collaborator (or revoke a pending invitation) from the origin repository.
+#[tauri::command]
+pub fn github_collaborator_remove(username:String,state:State<'_,AppState>)->Result<String,String>{
+ let root=workspace::root(&state)?;
+ let slug=origin_slug(&root)?;
+ let username=username.trim();
+ if !valid_login(username){return Err("Enter a valid GitHub username.".into())}
+ gh(&root,&["api","-X","DELETE",&format!("repos/{slug}/collaborators/{username}")])?;
+ Ok(format!("Removed {username} from {slug}."))
+}
+
+#[cfg(test)]
+mod github_tests{
+ #[test] fn validates_logins(){
+  assert!(super::valid_login("octocat"));
+  assert!(super::valid_login("OW-Programing-Language"));
+  assert!(!super::valid_login("-bad"));
+  assert!(!super::valid_login("has space"));
+  assert!(!super::valid_login(""));
+ }
 }
