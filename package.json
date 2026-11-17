@@ -11,7 +11,7 @@
     "package:desktop": "npm run bundle:ow && tauri build",
     "make-latest": "node scripts/make-latest-json.mjs",
     "bundle:ow": "node scripts/bundle-ow.mjs",
-    "test": "node --test tests/contracts.test.mjs tests/quality.test.mjs tests/project-workflow.test.mjs",
+    "test": "node --test tests/contracts.test.mjs tests/quality.test.mjs tests/project-workflow.test.mjs tests/owunit-ui.test.mjs",
     "tauri": "tauri",
     "check": "npm run test && npm run build",
     "check:desktop": "cargo test --manifest-path src-tauri/Cargo.toml",
