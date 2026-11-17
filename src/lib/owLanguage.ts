@@ -150,7 +150,7 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
    if(!converted)return {actions:[],dispose:()=>{}};
    const edit={range:new editor.Range(lineNumber,1,lineNumber,model.getLineMaxColumn(lineNumber)),text:converted};
    return {actions:[{title:'Modernize OW function signature to YAML style',kind:'refactor.rewrite',
-     edit:{edits:[{resource:model.uri,edit}]} }],dispose:()=>{}};
+     edit:{edits:[{resource:model.uri,textEdit:edit,versionId:model.getVersionId()}]} }],dispose:()=>{}};
   }
  });
  editor.languages.registerDefinitionProvider('ow',{
