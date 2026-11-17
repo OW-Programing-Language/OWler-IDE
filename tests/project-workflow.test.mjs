@@ -47,3 +47,28 @@ test('bundled OW revision contains project dependency resolver',()=>{
  const script=read('scripts/bundle-ow.mjs');
  assert.match(script,/733a4ba60bebf9958d39b8132997b58aeb91cf01/);
 });
+
+test('right-click dependencies.yml invokes the real OW dependency update command',()=>{
+ const app=read('src/App.tsx');
+ const backend=read('src-tauri/src/terminal.rs');
+ const handler=read('src-tauri/src/lib.rs');
+ assert.match(app,/isDependencyManifest/);
+ assert.match(app,/Reload Dependencies<\/button>/);
+ assert.match(app,/call<string>\('reload_dependencies',\{path\}\)/);
+ assert.match(app,/await reloadProject\(true\)/);
+ assert.match(app,/modified&&.*confirm\(/);
+ assert.match(backend,/async fn reload_dependencies\(/);
+ assert.match(backend,/args\.extend\(\["deps"\.into\(\),"update"\.into\(\)\]\)/);
+ assert.match(backend,/validate_dependency_manifest\(&root,&relative\)/);
+ assert.match(backend,/output\.status\.success\(\)/);
+ assert.match(handler,/terminal::reload_dependencies/);
+});
+
+test('unsaved dependency changes require confirmation before the manifest is saved',()=>{
+ const app=read('src/App.tsx');
+ assert.match(app,/const modified=tabs\.find/);
+ assert.match(app,/if\(modified&&!confirm/);
+ assert.match(app,/disk!==modified\.saved&&!confirm/);
+ assert.match(app,/write_file',\{path,content:modified\.content\}/);
+ assert.match(app,/reloadingDependencies/);
+});
