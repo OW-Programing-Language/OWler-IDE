@@ -87,18 +87,28 @@ jobs:
           OW_JAR: vendor/ow/OwIDE.jar
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Build native bundle
-        run: npm run tauri build
+      # AppImage bundling via linuxdeploy fails on the bundled full JDK
+      # (libjvm.so resolution), so Linux ships .deb + .rpm instead.
+      - name: Build Linux bundles (deb + rpm)
+        if: runner.os == 'Linux'
+        run: npm run tauri build -- --bundles deb,rpm
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Build macOS bundle (dmg)
+        if: runner.os == 'macOS'
+        run: npm run tauri build -- --bundles dmg
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: Owler-IDE-${{ runner.os }}
+          if-no-files-found: ignore
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/rpm/*.rpm
       - name: Attach bundles to tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -106,4 +116,4 @@ jobs:
           files: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/rpm/*.rpm
