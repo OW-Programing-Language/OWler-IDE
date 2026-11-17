@@ -33,15 +33,15 @@ test('real OW compiler supports YAML signatures, native arrays and dynamic strin
  assert.match(syntax,/returns: string/);
  assert.match(syntax,/returns: array/);
  const checked=compiler(['check',entry]);
- assert.equal(checked.status,0,checked.stdout+'\\n'+checked.stderr);
+ assert.equal(checked.status,0,checked.stdout+'\n'+checked.stderr);
  const interpreted=compiler(['run',entry]);
- assert.equal(interpreted.status,0,interpreted.stdout+'\\n'+interpreted.stderr);
- assert.deepEqual(interpreted.stdout.replaceAll('\\r\\n','\\n').trim().split('\\n'),['7','Hello, OW','4']);
+ assert.equal(interpreted.status,0,interpreted.stdout+'\n'+interpreted.stderr);
+ assert.deepEqual(interpreted.stdout.replaceAll('\r\n','\n').trim().split('\n'),['7','Hello, OW','4']);
  const temp=mkdtempSync(join(tmpdir(),'owler-llvm-'));
  try{
   const output=join(temp,'native-features.ll');
   const emitted=compiler(['llvm',entry,output]);
-  assert.equal(emitted.status,0,emitted.stdout+'\\n'+emitted.stderr);
+  assert.equal(emitted.status,0,emitted.stdout+'\n'+emitted.stderr);
   assert.ok(existsSync(output),'real OW compiler must write LLVM IR');
   const ll=readFileSync(output,'utf8');
   assert.match(ll,/%ow\.array/);
