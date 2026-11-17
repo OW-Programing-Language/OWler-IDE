@@ -1,6 +1,6 @@
 [package]
 name = "owler-ide"
-version = "0.1.4"
+version = "0.1.5"
 description = "Owler IDE - desktop development environment for OW"
 authors = ["OW Programming Language"]
 edition = "2021"
