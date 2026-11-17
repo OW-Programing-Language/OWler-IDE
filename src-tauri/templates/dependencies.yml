@@ -9,3 +9,8 @@ dependencies:
     repository: github
     path: OW-Programing-Language/ow-math-questions
     version: c22d01cfee6be18d96d4c55b95b7e79892bca9f6
+
+  - name: owunit
+    repository: github
+    path: OW-Programing-Language/OWUnit
+    version: fde7cb6208305a4cda3bd623c9f520521f3137bf
