@@ -6,6 +6,41 @@ Owler combines a Rust/Tauri 2 native backend with a fast React/TypeScript fronte
 
 > **Release status:** This repository contains Owler IDE's expanded desktop application source and an automated installer pipeline. It is **not yet a verified installable release**: the native Rust/Tauri executable must pass a real build and runtime smoke test on Windows. Do not distribute it as production-ready until the CI checks and on-device test are green. The source is published at https://github.com/OW-Programing-Language/OWler-IDE.
 
+## OW compiler sync — YAML signatures, native LLVM and current runtime
+
+OWler's packaged OW compiler is pinned to **`117884cfa873d38fccc312fc3a1f3af5552e1311`**,
+the merged compiler revision with the YAML-style function signatures (PR #53),
+native integer arrays and ARC, native typed array-function arguments/returns,
+reference-counted dynamic UTF-8 strings, LLVM generation and OWUnit testing.
+
+Preferred OW syntax:
+
+```ow
+fn greet(name: string):
+  returns: string
+  return: "Hello " + name
+
+main:
+  print: greet("OW")
+```
+
+- Monaco highlights `returns:`, suggests native/interpreter types after a
+  parameter colon or `returns:`, and includes YAML, native array/string,
+  OWUnit, and try/catch snippets.
+- Use Monaco's **Modernize OW function signature to YAML style** quick fix
+  on ordinary legacy `fn greet(name string) -> string:` lines. The conversion
+  is opt-in and does not change unrelated files.
+- The **LLVM IR** toolbar command or command-palette action runs the real
+  `ow llvm` compiler in a terminal and writes generated `.ll` files to
+  `build/owler/` under the project. **Build** invokes native `ow build`.
+- New projects include a runnable YAML-style console starter and an example
+  demonstrating arrays, Unicode string length and dynamic string concatenation.
+- OWUnit gutter ▶ controls and test results continue to work; tests execute
+  through OW's interpreter, not as native LLVM binaries.
+
+For full details, compiler coverage and important native limitations, read
+[OW compiler compatibility](docs/OW-COMPILER-COMPATIBILITY.md).
+
 ## OWUnit — integrated unit testing
 
 Owler now supports the native [OWUnit](https://github.com/OW-Programing-Language/OWUnit)
@@ -38,8 +73,10 @@ project name and parent folder. The default console starter contains:
 
 ```text
 my-ow-project/
-├── src/main.ow               # prints Hello, World!
-├── dependencies.yml           # GitHub repo + OW Math Questions dependency
+├── src/main.ow               # YAML-style typed function; prints Hello, World!
+├── examples/native-features.ow # arrays, dynamic strings, Unicode in native OW
+├── tests/ExampleTest.ow      # annotated OWUnit starter test
+├── dependencies.yml           # pinned Math Questions + OWUnit repositories
 ├── .gitignore                 # excludes downloaded .ow/deps cache
 └── README.md
 ```
@@ -71,9 +108,9 @@ so the IDE's own Run/Check tasks can resolve those dependencies too.
 
 | Area | Capabilities |
 |------|--------------|
-| Editing | Monaco editor, OW highlighting, snippets, local/open-file symbol completion and go-to-definition, hover documentation, document symbols, compiler Problems markers, minimap, multi-tabs, save shortcuts |
+| Editing | Monaco editor, YAML-style function highlighting, type-aware completion, snippets, opt-in legacy signature modernization, symbols and go-to-definition, compiler Problems markers, minimap, multi-tabs, save shortcuts |
 | Projects | Open folder, create OW console / Night web / interactive UI starter, create/rename/delete files and folders, directory explorer, outline, quick-open command palette |
-| OW language | `ow check`, `ow run`, `ow build`, `ow package` for `web`, `gui`, `console`, integrated output in terminal |
+| OW language | `ow check`, `ow run`, native `ow build`, `ow llvm` (LLVM IR), `ow test` (OWUnit) and `ow package` for `web`, `gui`, `console`, integrated terminal output |
 | Web apps | Night starter with routes, REST JSON and persistent OW models; localhost web preview, `serve: 8080` and runtime packaging |
 | Git | Initialize, stage, unstage, commit, diff viewer, pull (`--ff-only`), push, fetch, branch actions, clone, history and remotes |
 | GitHub | Clone HTTPS/SSH, publish to **OW-Programing-Language**, list/create pull requests using `gh`, use local Git credentials |
@@ -118,12 +155,14 @@ The resulting files are placed in `src-tauri/target/release/bundle/`. These are 
 
 ### Build and run an OW or Night project
 
-Use the toolbar `Check`, `Build`, `Web app` or `Run OW`. The command output appears in the embedded terminal. Direct equivalent CLI commands are:
+Use the toolbar `Check`, `Build`, `LLVM IR`, `Web app` or `Run OW`. The command output appears in the embedded terminal. Direct equivalent CLI commands are:
 
 ```bash
 ow check src/main.ow
 ow run src/main.ow
 ow build src/main.ow
+ow llvm src/main.ow build/owler/src/main.ll
+ow test tests/
 ow package src/main.ow --name MyNightApp --type web --out dist
 ```
 
