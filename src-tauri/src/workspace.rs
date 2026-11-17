@@ -239,26 +239,55 @@ fn create_file(root: &Path, path: &str, content: &str) -> Result<(), String> {
     fs::write(full, content).map_err(|e|e.to_string())
 }
 
-#[tauri::command]
-pub fn create_project(base_dir: String, name: String, kind: String, state: State<'_, AppState>) -> Result<String, String> {
-    if name.is_empty() || name.len() > 50 || !name.chars().all(|c|c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+/// Create a standard OW project without overwriting an existing directory.
+/// All starter types use the same project-root dependency manifest.
+fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, String> {
+    if name.is_empty() || name.len() > 50 ||
+        !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err("Use 1–50 letters, digits, dashes, or underscores for the project name".into());
     }
-    let template = match kind.as_str() {
+    let template = match kind {
         "web" => include_str!("../templates/web.ow"),
         "ui" => include_str!("../templates/ui.ow"),
         "console" => include_str!("../templates/console.ow"),
         _ => return Err("Unknown project template".into()),
     };
-    let parent = fs::canonicalize(&base_dir).map_err(|e|e.to_string())?;
     if !parent.is_dir() { return Err("Select a parent folder".into()); }
-    let dir = parent.join(&name);
-    fs::create_dir(&dir).map_err(|e|format!("Could not create project: {e}"))?;
-    create_file(&dir, "src/main.ow", template)?;
-    create_file(&dir, ".gitignore", "dist/\nbuild/\now-data.json\n*.exe\n*.msi\n")?;
-    create_file(&dir, "README.md", &format!("# {name}\n\nCreated with Owler IDE.\n\n```sh\now check src/main.ow\now run src/main.ow\n# For web / GUI application bundles:\now package src/main.ow --name {name} --type {} --out dist\n```\n", if kind=="web" {"web"} else if kind=="ui" {"gui"} else {"console"}))?;
-    let _ = std::process::Command::new("git").args(["init", "-b", "main"]).current_dir(&dir).output();
-    *state.workspace.lock().map_err(|e|e.to_string())?=Some(dir.clone());
+    let dir = parent.join(name);
+    fs::create_dir(&dir).map_err(|e| format!("Could not create project: {e}"))?;
+    let result = (|| -> Result<(), String> {
+        create_file(&dir, "src/main.ow", template)?;
+        create_file(&dir, "dependencies.yml", include_str!("../templates/dependencies.yml"))?;
+        create_file(&dir, ".gitignore", ".ow/deps/\ndist/\nbuild/\now-data.json\n*.exe\n*.msi\n")?;
+        create_file(&dir, "README.md", &format!(
+            "# {name}\n\nCreated with OWler IDE.\n\n\
+            ## Getting started\n\n```sh\now deps install\now check src/main.ow\now run src/main.ow\n```\n\n\
+            `dependencies.yml` includes the OW Math Questions library and pins its Git version.\n\
+            Add more OW repositories and libraries to that manifest, then use \
+            `ow deps update` to refresh the generated `dependencies.lock.yml`.\n\
+            Commit the manifest and lockfile, not the `.ow/deps/` cache.\n\n\
+            To bundle this project:\n\n```sh\now package src/main.ow --name {name} --type {} --out dist\n```\n",
+            if kind == "web" { "web" } else if kind == "ui" { "gui" } else { "console" },
+        ))?;
+        // Git is optional; the project remains usable without it.
+        let _ = std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&dir).output();
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(error);
+    }
+    Ok(dir)
+}
+
+#[tauri::command]
+pub fn create_project(base_dir: String, name: String, kind: String, state: State<'_, AppState>) -> Result<String, String> {
+    let parent = fs::canonicalize(&base_dir).map_err(|e| e.to_string())?;
+    let dir = scaffold_project(&parent, &name, &kind)?;
+    *state.workspace.lock().map_err(|e| e.to_string())? = Some(dir.clone());
+    *state.roots.lock().map_err(|e| e.to_string())? = vec![dir.clone()];
     Ok(dir.to_string_lossy().to_string())
 }
 
