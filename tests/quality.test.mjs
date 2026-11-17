@@ -30,7 +30,7 @@ test('terminal resize and termination are backed by PTY commands',()=>{
  assert.match(read('src/components/TerminalPanel.tsx'),/terminal_resize/);
 });
 test('source files have no TypeScript syntax errors',{skip:!ts},()=>{
- for(const file of ['src/App.tsx','src/components/EditorPane.tsx','src/components/TerminalPanel.tsx','src/lib/api.ts','src/lib/owLanguage.ts']){
+ for(const file of ['src/App.tsx','src/components/EditorPane.tsx','src/components/TerminalPanel.tsx','src/components/OwTestPanel.tsx','src/lib/api.ts','src/lib/owLanguage.ts','src/lib/owTests.ts']){
   const source=ts.createSourceFile(file,read(file),ts.ScriptTarget.Latest,true,file.endsWith('.tsx')?ts.ScriptKind.TSX:ts.ScriptKind.TS);
   assert.deepEqual(source.parseDiagnostics.map(d=>ts.flattenDiagnosticMessageText(d.messageText,' ')),[],file);
  }
