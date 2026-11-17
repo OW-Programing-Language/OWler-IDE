@@ -24,6 +24,15 @@ Use `ow deps install` to install the library, or just run/check with an OW
 compiler that supports `dependencies.yml`. Add other repositories and libraries
 to the manifest as needed.
 
+To apply changes to OW libraries, right-click the project-root
+**dependencies.yml → Reload Dependencies**. OWler saves confirmed unsaved
+manifest edits, executes `ow deps update` with the project's configured OW
+toolchain (including additional workspace roots), refreshes the lockfile and
+downloaded libraries, and then reloads the project explorer and open tabs.
+If the resolver fails (invalid YAML, missing Git, inaccessible repository), the
+error is shown and OWler does not claim success. Other unsaved editor files
+are never automatically saved.
+
 To pick up edits from Claude Code or Codex CLI, choose **File → Reload Project**,
 click the explorer refresh button or use **Ctrl+Shift+R**. This rescans the
 project tree and refreshes the contents of already-open tabs from disk.
