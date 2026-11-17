@@ -153,7 +153,8 @@ fn validate_dependency_manifest(root: &std::path::Path, relative: &str) -> Resul
   return Err("Project dependencies.yml does not exist".into());
  }
  let canonical=std::fs::canonicalize(&manifest).map_err(|e|e.to_string())?;
- if !canonical.starts_with(root) {
+ let canonical_root=std::fs::canonicalize(root).map_err(|e|e.to_string())?;
+ if !canonical.starts_with(&canonical_root) {
   return Err("Dependency manifest escapes the workspace".into());
  }
  Ok(())

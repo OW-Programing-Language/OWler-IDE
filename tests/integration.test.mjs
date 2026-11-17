@@ -77,3 +77,21 @@ test('real OW Night starter serves the actual HTTP health endpoint',{skip:!jar},
  assert.equal(response.status,'ok');
  assert.equal(response.language,'OW');
 });
+
+
+test('real OWUnit integration runs a suite and a single annotated class method',{skip:!jar},()=>{
+ const fixture=join(root,'tests','owunit-fixture');
+ const all=compiler(['test','tests/CalculatorTest.ow'],fixture);
+ assert.equal(all.status,0,all.stdout+'\n'+all.stderr);
+ assert.match(all.stdout,/\[PASS\] CalculatorTest\.addsNumbers/);
+ assert.match(all.stdout,/\[PASS\] CalculatorTest\.multiplicationWorks/);
+ assert.match(all.stdout,/2 passed, 0 failed/);
+ const single=compiler(['test','tests/CalculatorTest.ow','--filter','CalculatorTest.addsNumbers'],fixture);
+ assert.equal(single.status,0,single.stdout+'\n'+single.stderr);
+ assert.match(single.stdout,/\[PASS\] CalculatorTest\.addsNumbers/);
+ assert.doesNotMatch(single.stdout,/\[PASS\] CalculatorTest\.multiplicationWorks/);
+ assert.match(single.stdout,/1 passed, 0 failed/);
+ const missing=compiler(['test','tests/CalculatorTest.ow','--filter','CalculatorTest.notFound'],fixture);
+ assert.notEqual(missing.status,0,'Unknown test selector must fail');
+ assert.match(missing.stdout,/No @Test matched filter/);
+});

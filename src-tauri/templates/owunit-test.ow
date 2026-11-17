@@ -1,0 +1,18 @@
+# OWUnit test — run with: ow test tests/__TEST_CLASS__.ow
+# Run one method with: ow test tests/__TEST_CLASS__.ow --filter __TEST_CLASS__.exampleWorks
+import "@owunit/src/OWAssert.ow"
+
+class __TEST_CLASS__:
+  field checker
+
+  @BeforeEach
+  fn setUp():
+    set this.checker: new OWAssert()
+
+  @Test
+  fn exampleWorks():
+    call: this.checker.assertEquals(4, 2 + 2)
+
+  @AfterEach
+  fn tearDown():
+    print: "Test completed"

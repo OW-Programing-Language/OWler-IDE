@@ -1,0 +1,20 @@
+import "@owunit/src/OWAssert.ow"
+
+class CalculatorTest:
+  field checker
+
+  @BeforeEach
+  fn setup():
+    set this.checker: new OWAssert()
+
+  @Test
+  fn addsNumbers():
+    call: this.checker.assertEquals(5, 2 + 3)
+
+  @Test
+  fn multiplicationWorks():
+    call: this.checker.assertEquals(12, 3 * 4)
+
+  @AfterEach
+  fn teardown():
+    call: assert(true)

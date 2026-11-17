@@ -6,6 +6,31 @@ Owler combines a Rust/Tauri 2 native backend with a fast React/TypeScript fronte
 
 > **Release status:** This repository contains Owler IDE's expanded desktop application source and an automated installer pipeline. It is **not yet a verified installable release**: the native Rust/Tauri executable must pass a real build and runtime smoke test on Windows. Do not distribute it as production-ready until the CI checks and on-device test are green. The source is published at https://github.com/OW-Programing-Language/OWler-IDE.
 
+## OWUnit — integrated unit testing
+
+Owler now supports the native [OWUnit](https://github.com/OW-Programing-Language/OWUnit)
+library and the interpreter's `@Test`, `@BeforeEach`, `@AfterEach` annotations.
+
+- **Green ▶ gutter icons** appear beside each `@Test` function/method. Clicking one
+  executes just that test via `ow test <file> --filter ClassName.methodName`.
+- **Test** in the top toolbar or **Run All** in the bottom **Tests** panel
+  executes `ow test tests/` for the current project, discovering test files recursively.
+- Right-click `*Test.ow` or `*_test.ow` in the explorer to run that file's tests.
+  Right-click a folder to run all tests within it.
+- **File → New OWUnit Test…** creates a new test class under `tests/`.
+  The corresponding action is also in the command palette and project root menu.
+- The **Tests** tool window displays per-method PASS/FAIL results, a summary,
+  error messages, rerun controls, raw OW output, and click-to-navigate results.
+- A new OW project includes `tests/ExampleTest.ow` and both `math` and
+  `owunit` libraries in its `dependencies.yml`.
+
+The bundled OW toolchain is pinned to the merged interpreter supporting
+`ow test --filter`. If you override `OWLER_OW_BIN`, use a recent OW compiler
+that includes [ow-lang PR #46](https://github.com/OW-Programing-Language/ow-lang/pull/46).
+OWUnit is interpreter-based; compiling tests to native executables is not
+supported yet. Existing projects need OWUnit declared in `dependencies.yml`
+to import `@owunit/src/OWAssert.ow`.
+
 ## Project creation and external code reload
 
 Choose **File → Create New OW Project…** (or the command palette) and enter a
