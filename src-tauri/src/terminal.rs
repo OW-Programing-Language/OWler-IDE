@@ -117,16 +117,32 @@ pub fn terminal_resize(session_id:String,cols:u16,rows:u16,state:State<'_,AppSta
 /// Generate LLVM IR inside the project (and never through a symlink escaping it).
 /// Keep the source's subdirectory to avoid collisions between main.ow files.
 fn prepare_llvm_output(root:&std::path::Path,entry:&str)->Result<String,String>{
- let output=std::path::PathBuf::from("build").join("owler")
-     .join(std::path::Path::new(entry).with_extension("ll"));
- let full=root.join(&output);
- let parent=full.parent().ok_or("Invalid LLVM output directory")?;
- std::fs::create_dir_all(parent).map_err(|e|format!("Cannot create LLVM output directory: {e}"))?;
+ use std::path::{Component,Path,PathBuf};
+ let output=PathBuf::from("build").join("owler")
+     .join(Path::new(entry).with_extension("ll"));
  let root_real=std::fs::canonicalize(root).map_err(|e|e.to_string())?;
- let parent_real=std::fs::canonicalize(parent).map_err(|e|e.to_string())?;
- if !parent_real.starts_with(&root_real){
-  return Err("LLVM output directory escapes the OW project".into());
+ let parent_rel=output.parent().ok_or("Invalid LLVM output directory")?;
+ let mut current=root_real.clone();
+ // Check each path component before creating its successor; this prevents
+ // following symlinked intermediate directories outside the workspace.
+ for component in parent_rel.components(){
+  let Component::Normal(part)=component else {
+   return Err("Invalid LLVM output path".into());
+  };
+  current.push(part);
+  if current.is_symlink(){
+   return Err("LLVM output directory must not contain symlinks".into());
+  }
+  if !current.exists(){
+   std::fs::create_dir(&current)
+       .map_err(|e|format!("Cannot create LLVM output directory: {e}"))?;
+  }
+  let real=std::fs::canonicalize(&current).map_err(|e|e.to_string())?;
+  if !real.starts_with(&root_real){
+   return Err("LLVM output directory escapes the OW project".into());
+  }
  }
+ let full=root_real.join(&output);
  if full.is_symlink(){
   return Err("Refusing to overwrite a symlinked LLVM output file".into());
  }
