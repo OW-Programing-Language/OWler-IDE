@@ -139,6 +139,73 @@ pub fn ow_task(action:String,entry:String,name:Option<String>,kind:Option<String
  start_ow(&app,&state,&action,&entry,name,kind)
 }
 
+/// Reject arbitrary files and symlinked manifests. Multi-root workspace paths
+/// are resolved to their owning project before this validation runs.
+fn validate_dependency_manifest(root: &std::path::Path, relative: &str) -> Result<(), String> {
+ if relative != "dependencies.yml" {
+  return Err("Reload Dependencies is only available for a project-root dependencies.yml".into());
+ }
+ let manifest=root.join(relative);
+ if manifest.is_symlink() {
+  return Err("Cannot reload dependencies from a symlinked dependencies.yml".into());
+ }
+ if !manifest.is_file() {
+  return Err("Project dependencies.yml does not exist".into());
+ }
+ let canonical=std::fs::canonicalize(&manifest).map_err(|e|e.to_string())?;
+ if !canonical.starts_with(root) {
+  return Err("Dependency manifest escapes the workspace".into());
+ }
+ Ok(())
+}
+
+/// Apply the edited project-root manifest using OW's own dependency manager.
+/// Changing a pinned dependency in dependencies.yml requires updating the lock.
+#[tauri::command]
+pub async fn reload_dependencies(path:String,app:AppHandle,state:State<'_,AppState>)->Result<String,String>{
+ let (root,relative)=workspace::resolve(&state,&path)?;
+ validate_dependency_manifest(&root,&relative)?;
+ let (program,mut args)=crate::ow::toolchain(&app)?;
+ args.extend(["deps".into(),"update".into()]);
+ tauri::async_runtime::spawn_blocking(move||{
+  let output=std::process::Command::new(program)
+   .args(args)
+   .current_dir(crate::ow::plain(&root))
+   .output()
+   .map_err(|e|format!("Could not launch OW dependencies: {e}"))?;
+  let logs=format!("{}{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+  if !output.status.success(){
+   return Err(format!("OW dependency reload failed (exit {}): {}",
+    output.status.code().map(|n|n.to_string()).unwrap_or_else(||"unknown".into()),
+    logs.trim()));
+  }
+  Ok(if logs.trim().is_empty(){"Dependencies reloaded successfully".into()}else{logs.trim().to_string()})
+ }).await.map_err(|e|format!("OW dependency reload task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod dependency_reload_tests {
+ use super::*;
+ #[test]
+ fn permits_only_real_project_root_manifest() {
+  let root=std::env::temp_dir().join(format!("owler-deps-reload-{}",uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&root).unwrap();
+  std::fs::write(root.join("dependencies.yml"),"format: 1\nrepositories: []\ndependencies: []\n").unwrap();
+  assert!(validate_dependency_manifest(&root,"dependencies.yml").is_ok());
+  assert!(validate_dependency_manifest(&root,"src/dependencies.yml").is_err());
+  assert!(validate_dependency_manifest(&root,"../dependencies.yml").is_err());
+  assert!(validate_dependency_manifest(&root,"other.yml").is_err());
+  std::fs::remove_dir_all(&root).unwrap();
+ }
+ #[test]
+ fn rejects_missing_manifest() {
+  let root=std::env::temp_dir().join(format!("owler-deps-absent-{}",uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&root).unwrap();
+  assert!(validate_dependency_manifest(&root,"dependencies.yml").is_err());
+  std::fs::remove_dir_all(&root).unwrap();
+ }
+}
+
 #[derive(serde::Serialize)]
 pub struct WebRun { pub session_id:String, pub port:u16, pub url:String }
 
