@@ -260,6 +260,8 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
         create_file(&dir, "dependencies.yml", include_str!("../templates/dependencies.yml"))?;
         create_file(&dir, "tests/ExampleTest.ow",
             &include_str!("../templates/owunit-test.ow").replace("__TEST_CLASS__", "ExampleTest"))?;
+        create_file(&dir, "examples/native-features.ow",
+            include_str!("../templates/native-features.ow"))?;
         create_file(&dir, ".gitignore", ".ow/deps/\ndist/\nbuild/\now-data.json\n*.exe\n*.msi\n")?;
         create_file(&dir, "README.md", &format!(
             "# {name}\n\nCreated with OWler IDE.\n\n\
@@ -311,7 +313,12 @@ mod tests {
       let manifest = fs::read_to_string(project.join("dependencies.yml")).unwrap();
       let ignore = fs::read_to_string(project.join(".gitignore")).unwrap();
       assert!(entry.contains("main:"));
-      assert!(entry.contains("print: \"Hello, World!\""));
+      assert!(entry.contains("fn greet(name: string):"));
+      assert!(entry.contains("returns: string"));
+      assert!(entry.contains("print: greet(\"World\")"));
+      let native_example = fs::read_to_string(project.join("examples/native-features.ow")).unwrap();
+      assert!(native_example.contains("returns: array"));
+      assert!(native_example.contains("return: array(count, 3)"));
       assert!(manifest.contains("repositories:"));
       assert!(manifest.contains("OW-Programing-Language/ow-math-questions"));
       assert!(manifest.contains("version: c22d01cfee6be18d96d4c55b95b7e79892bca9f6"));
@@ -332,6 +339,7 @@ mod tests {
         let project = scaffold_project(&base, kind, kind)?;
         assert!(project.join("src/main.ow").is_file());
         assert!(project.join("dependencies.yml").is_file());
+        assert!(project.join("examples/native-features.ow").is_file());
       }
       Ok::<(), String>(())
     })();

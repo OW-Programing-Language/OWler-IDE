@@ -1,0 +1,18 @@
+# OW native LLVM showcase. Run/Check/Build or Emit LLVM IR in OWler IDE.
+# Native features: typed functions, i32 arrays with aliases/ARC,
+# dynamic UTF-8 string concatenation, Unicode string length.
+fn make(count: int):
+  returns: array
+  return: array(count, 3)
+
+fn greet(name: string):
+  returns: string
+  return: "Hello, " + name
+
+main:
+  set numbers: make(3)
+  set alias: numbers
+  set numbers[1]: 7
+  print: alias[1]
+  print: greet("OW")
+  print: len("hé🙂")

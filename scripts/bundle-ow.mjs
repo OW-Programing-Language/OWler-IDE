@@ -9,7 +9,7 @@ import {execFileSync} from 'node:child_process';
 import {existsSync,cpSync,mkdirSync,mkdtempSync,rmSync,writeFileSync,copyFileSync,readdirSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-const OW_REF=process.env.OW_REF||'f16f77ceb960b44e309ce2b8b55b85eead8a6387';
+const OW_REF=process.env.OW_REF||'117884cfa873d38fccc312fc3a1f3af5552e1311';
 const sourceUrl='https://github.com/OW-Programing-Language/ow-lang.git';
 const root=resolve(import.meta.dirname,'..');
 const dest=join(root,'vendor','ow');
@@ -18,7 +18,7 @@ const log=(msg)=>console.log(`[Owler toolchain] ${msg}`);
 const run=(cmd,args,cwd)=>execFileSync(cmd,args,{cwd,stdio:'inherit',shell:process.platform==='win32'&&['mvn','mvn.cmd'].includes(cmd)});
 const javaHome=process.env.JAVA_HOME;
 if(!javaHome||!existsSync(join(javaHome,'bin',process.platform==='win32'?'jpackage.exe':'jpackage'))){
- console.error('A full JDK 17+ with jpackage is required. Set JAVA_HOME before packaging Owler.');
+ console.error('A full JDK 21+ with jpackage is required. Set JAVA_HOME before packaging Owler.');
  process.exit(1);
 }
 try{

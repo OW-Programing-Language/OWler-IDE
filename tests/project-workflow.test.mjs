@@ -8,7 +8,19 @@ const read=path=>readFileSync(resolve(import.meta.dirname,'..',path),'utf8');
 test('OW console starter is a runnable Hello World program',()=>{
  const entry=read('src-tauri/templates/console.ow');
  assert.match(entry,/^main:/m);
- assert.match(entry,/print: "Hello, World!"/);
+ assert.match(entry,/fn greet\(name: string\):/);
+ assert.match(entry,/returns: string/);
+ assert.match(entry,/print: greet\("World"\)/);
+});
+
+test('native OW showcase covers arrays, string ARC and YAML syntax',()=>{
+ const sample=read('src-tauri/templates/native-features.ow');
+ const rust=read('src-tauri/src/workspace.rs');
+ assert.match(sample,/returns: array/);
+ assert.match(sample,/return: array\(count, 3\)/);
+ assert.match(sample,/set numbers\[1\]: 7/);
+ assert.match(sample,/len\("hé🙂"\)/);
+ assert.match(rust,/examples\/native-features\.ow/);
 });
 
 test('every generated OW project declares GitHub Math Questions dependency',()=>{
@@ -45,7 +57,7 @@ test('reload updates opened tabs without discarding unsaved changes',()=>{
 
 test('bundled OW revision contains project dependency resolver',()=>{
  const script=read('scripts/bundle-ow.mjs');
- assert.match(script,/f16f77ceb960b44e309ce2b8b55b85eead8a6387/);
+ assert.match(script,/117884cfa873d38fccc312fc3a1f3af5552e1311/);
 });
 
 test('right-click dependencies.yml invokes the real OW dependency update command',()=>{

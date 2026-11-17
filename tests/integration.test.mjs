@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
-import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,writeFileSync,rmSync,existsSync} from 'node:fs';
 import {createServer} from 'node:net';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -27,6 +27,29 @@ test('real OW runtime executes new console project',{skip:!jar},()=>{
  assert.equal(result.status,0,`${result.stdout}\n${result.stderr}`);
  assert.match(result.stdout,/Hello, World!/);
 });
+test('real OW compiler supports YAML signatures, native arrays and dynamic strings',{skip:!jar},()=>{
+ const entry=join(root,'src-tauri','templates','native-features.ow');
+ const syntax=readFileSync(entry,'utf8');
+ assert.match(syntax,/returns: string/);
+ assert.match(syntax,/returns: array/);
+ const checked=compiler(['check',entry]);
+ assert.equal(checked.status,0,checked.stdout+'\n'+checked.stderr);
+ const interpreted=compiler(['run',entry]);
+ assert.equal(interpreted.status,0,interpreted.stdout+'\n'+interpreted.stderr);
+ assert.deepEqual(interpreted.stdout.replaceAll('\r\n','\n').trim().split('\n'),['7','Hello, OW','4']);
+ const temp=mkdtempSync(join(tmpdir(),'owler-llvm-'));
+ try{
+  const output=join(temp,'native-features.ll');
+  const emitted=compiler(['llvm',entry,output]);
+  assert.equal(emitted.status,0,emitted.stdout+'\n'+emitted.stderr);
+  assert.ok(existsSync(output),'real OW compiler must write LLVM IR');
+  const ll=readFileSync(output,'utf8');
+  assert.match(ll,/%ow\.array/);
+  assert.match(ll,/%ow\.string/);
+  assert.match(ll,/@__ow_native_string_concat/);
+ }finally{rmSync(temp,{recursive:true,force:true});}
+});
+
 // Bind the test to its own port: port 8080 may already be occupied on CI.
 async function availablePort(){
  const server=createServer();

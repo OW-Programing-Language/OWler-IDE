@@ -114,6 +114,41 @@ pub fn terminal_resize(session_id:String,cols:u16,rows:u16,state:State<'_,AppSta
  result
 }
 
+/// Generate LLVM IR inside the project (and never through a symlink escaping it).
+/// Keep the source's subdirectory to avoid collisions between main.ow files.
+fn prepare_llvm_output(root:&std::path::Path,entry:&str)->Result<String,String>{
+ use std::path::{Component,Path,PathBuf};
+ let output=PathBuf::from("build").join("owler")
+     .join(Path::new(entry).with_extension("ll"));
+ let root_real=std::fs::canonicalize(root).map_err(|e|e.to_string())?;
+ let parent_rel=output.parent().ok_or("Invalid LLVM output directory")?;
+ let mut current=root_real.clone();
+ // Check each path component before creating its successor; this prevents
+ // following symlinked intermediate directories outside the workspace.
+ for component in parent_rel.components(){
+  let Component::Normal(part)=component else {
+   return Err("Invalid LLVM output path".into());
+  };
+  current.push(part);
+  if current.is_symlink(){
+   return Err("LLVM output directory must not contain symlinks".into());
+  }
+  if !current.exists(){
+   std::fs::create_dir(&current)
+       .map_err(|e|format!("Cannot create LLVM output directory: {e}"))?;
+  }
+  let real=std::fs::canonicalize(&current).map_err(|e|e.to_string())?;
+  if !real.starts_with(&root_real){
+   return Err("LLVM output directory escapes the OW project".into());
+  }
+ }
+ let full=root_real.join(&output);
+ if full.is_symlink(){
+  return Err("Refusing to overwrite a symlinked LLVM output file".into());
+ }
+ Ok(output.to_string_lossy().replace('\\',"/"))
+}
+
 pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,name:Option<String>,kind:Option<String>)->Result<String,String>{
  let (root,rel)=workspace::resolve(state,entry)?;
  let _ = workspace::existing_ow(&root,&rel)?;
@@ -121,6 +156,10 @@ pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,
  let (prog,mut args)=crate::ow::toolchain(app)?;
  match action {
   "check"|"run"|"build"=>{args.push(action.into());args.push(entry.into());},
+  "llvm"=>{
+    let output=prepare_llvm_output(&root,entry)?;
+    args.extend(["llvm".into(),entry.into(),output]);
+  },
   "package"=>{
     args.push("package".into());args.push(entry.into());
     let name=name.unwrap_or_else(||"OwApplication".into());
@@ -132,6 +171,34 @@ pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,
   _=>return Err("Invalid OW action".into())
  }
  create_session_in(app,state,prog,args,Some(root))
+}
+
+#[cfg(test)]
+mod llvm_output_tests {
+ use super::*;
+ #[test]
+ fn llvm_ir_is_written_under_the_project_with_source_subdirectories() {
+  let root=std::env::temp_dir().join(format!("owler-llvm-{}",uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&root).unwrap();
+  let result=prepare_llvm_output(&root,"src/main.ow").unwrap();
+  assert_eq!(result,"build/owler/src/main.ll");
+  assert!(root.join("build/owler/src").is_dir());
+  std::fs::remove_dir_all(&root).unwrap();
+ }
+ #[cfg(unix)]
+ #[test]
+ fn refuses_symlink_output_directory_outside_the_project() {
+  use std::os::unix::fs::symlink;
+  let root=std::env::temp_dir().join(format!("owler-llvm-{}",uuid::Uuid::new_v4()));
+  let elsewhere=std::env::temp_dir().join(format!("owler-outside-{}",uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&root).unwrap();
+  std::fs::create_dir_all(&elsewhere).unwrap();
+  symlink(&elsewhere,root.join("build")).unwrap();
+  let result=prepare_llvm_output(&root,"src/main.ow");
+  assert!(result.is_err());
+  std::fs::remove_dir_all(&root).unwrap();
+  std::fs::remove_dir_all(&elsewhere).unwrap();
+ }
 }
 
 #[tauri::command]

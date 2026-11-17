@@ -11,7 +11,16 @@ test('Tauri commands include build, run, package, Git, workspace, and terminals'
 
 test('Native build, Night web packaging and static check use actual OW CLI commands',()=>{
  const terminal=read('src-tauri/src/terminal.rs');
- for(const token of ['"check"','"run"','"build"','"package"','"web"','"console"','"gui"'])assert.ok(terminal.includes(token),token);
+ for(const token of ['"check"','"run"','"build"','"llvm"','"package"','"web"','"console"','"gui"'])assert.ok(terminal.includes(token),token);
+});
+
+test('LLVM IR action is exposed via the real compiler, not a mock',()=>{
+ const terminal=read('src-tauri/src/terminal.rs');
+ const app=read('src/App.tsx');
+ assert.match(terminal,/prepare_llvm_output/);
+ assert.match(terminal,/args\.extend\(\["llvm"\.into\(\)/);
+ assert.match(app,/runOw\('llvm'\)/);
+ assert.match(app,/Emit LLVM IR/);
 });
 
 test('Night template includes real OW runtime routes',()=>{
