@@ -27,8 +27,12 @@ fn image() -> String { std::env::var("OWLER_DISCORD_IMAGE").ok().filter(|s| !s.t
 /// Update the presence. `details` is the main line (e.g. "Editing main.ow") and
 /// `state_line` the secondary line (e.g. the project name).
 #[tauri::command]
-pub fn discord_activity(details: Option<String>, state_line: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state.discord.lock().map_err(|e| e.to_string())?;
+pub async fn discord_activity(details: Option<String>, state_line: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let discord=state.discord.clone();
+    tauri::async_runtime::spawn_blocking(move||update_activity(details,state_line,&discord)).await.map_err(|e|e.to_string())?
+}
+fn update_activity(details:Option<String>,state_line:Option<String>,discord:&std::sync::Mutex<Discord>)->Result<(),String>{
+    let mut guard = discord.lock().map_err(|e| e.to_string())?;
     if guard.client.is_none() {
         let mut c = match DiscordIpcClient::new(&app_id()) { Ok(c) => c, Err(_) => return Ok(()) };
         if c.connect().is_err() { return Ok(()); } // Discord not open — ignore quietly.
@@ -53,8 +57,11 @@ pub fn discord_activity(details: Option<String>, state_line: Option<String>, sta
 
 /// Clear the presence (e.g. on shutdown or when disabled).
 #[tauri::command]
-pub fn discord_clear(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state.discord.lock().map_err(|e| e.to_string())?;
-    if let Some(c) = guard.client.as_mut() { let _ = c.clear_activity(); }
-    Ok(())
+pub async fn discord_clear(state: State<'_, AppState>) -> Result<(), String> {
+    let discord=state.discord.clone();
+    tauri::async_runtime::spawn_blocking(move||{
+        let mut guard = discord.lock().map_err(|e| e.to_string())?;
+        if let Some(c) = guard.client.as_mut() { let _ = c.clear_activity(); }
+        Ok(())
+    }).await.map_err(|e|e.to_string())?
 }

@@ -259,3 +259,7 @@ The bundled OW compiler is pinned to 377b7c18981b9028e7f9dbbda4f6bf6aa8bfed32. T
 ### Live workspace synchronization
 
 The desktop explorer automatically checks open workspace roots every ~1.2 seconds (plus window focus) and reflects externally created, renamed, and deleted files. Clean open editor tabs update from disk; unsaved buffers are retained and show an explicit conflict banner. Saving compares the last acknowledged contents against the current disk version and requires confirmation for an overwrite or recreation. The check is not a cross-process file lock: a concurrent writer can still race with a save. Git decorations refresh periodically. Dependency/build caches are excluded from the explorer scan. This uses bounded-interval polling, not an OS-native event watcher; very large workspaces may take longer. Renamed/deleted tabs retain their original path and buffer until closed or explicitly recreated.
+
+### Startup responsiveness
+
+Owler defers workspace restore and the single compiler readiness probe until after initial rendering. Workspace scans, CLI detection, GitHub authentication and Discord IPC run off the UI thread; GitHub authentication and tool discovery are on demand. Monaco and xterm load when first used. File tree rendering uses stable keyed rows and indexed Git changes. These are source-level performance improvements, not a measured cold-start speed guarantee.

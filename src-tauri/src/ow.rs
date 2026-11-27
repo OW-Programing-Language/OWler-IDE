@@ -52,7 +52,10 @@ pub fn toolchain(app:&AppHandle)->Result<(String,Vec<String>),String>{
 }
 
 #[tauri::command]
-pub fn ow_toolchain_info(app:AppHandle)->ToolchainInfo{
+pub async fn ow_toolchain_info(app:AppHandle)->Result<ToolchainInfo,String>{
+ tauri::async_runtime::spawn_blocking(move||probe_toolchain(app)).await.map_err(|e|e.to_string())
+}
+fn probe_toolchain(app:AppHandle)->ToolchainInfo{
  let result=toolchain(&app);
  let note="OW annotations, module discovery and generated repositories are interpreter-only; Night JDBC requires its platform JAR. Native LLVM supports typed string arrays and integer/string/mixed/nested dictionaries, but not every interpreter feature. Runtime extension JARs are selected explicitly per workspace.".to_string();
  match result {
@@ -183,10 +186,12 @@ fn executable_present(name:&str)->bool{
  std::env::var_os("PATH").map(|paths|std::env::split_paths(&paths).any(|dir|variants.iter().any(|file|dir.join(file).is_file()))).unwrap_or(false)
 }
 #[tauri::command]
-pub fn environment_status(app:AppHandle)->Vec<CliAvailability>{
- let mut info:Vec<CliAvailability>=["git","gh","java","clang","zig","claude","codex","gemini","aider","opencode"]
+pub async fn environment_status()->Result<Vec<CliAvailability>,String>{
+ tauri::async_runtime::spawn_blocking(detect_cli_tools).await.map_err(|e|e.to_string())
+}
+fn detect_cli_tools()->Vec<CliAvailability>{
+ let info:Vec<CliAvailability>=["git","gh","java","clang","zig","claude","codex","gemini","aider","opencode"]
   .iter().map(|name|CliAvailability{name:(*name).into(),available:executable_present(name)}).collect();
- info.push(CliAvailability{name:"ow compiler".into(),available:ow_toolchain_info(app).available});
  info
 }
 #[cfg(test)]

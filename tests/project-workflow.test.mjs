@@ -124,3 +124,27 @@ test('workspace creation and cloning do not replace the live roots before user o
  assert.doesNotMatch(create,/state\.roots\.lock/);
  assert.doesNotMatch(clone,/state\.workspace\.lock/);
 });
+
+test('cold start defers probes and loads compiler only once',()=>{
+ const app=read('src/App.tsx'),ow=read('src-tauri/src/ow.rs'),git=read('src-tauri/src/git.rs'),discord=read('src-tauri/src/discord.rs');
+ assert.match(app,/const restore=setTimeout/);
+ assert.match(app,/const probe=setTimeout/);
+ assert.match(app,/if\(section==='git'\)void refreshAuth/);
+ assert.match(app,/section==='tools'\)void call<CliAvailability\[\]>/);
+ assert.match(ow,/pub async fn ow_toolchain_info/);
+ assert.match(ow,/spawn_blocking\(move\|\|probe_toolchain/);
+ assert.match(ow,/pub async fn environment_status/);
+ assert.doesNotMatch(ow.slice(ow.indexOf('fn detect_cli_tools'),ow.indexOf('mod environment_tests')),/ow_toolchain_info/);
+ assert.match(git,/spawn_blocking\(probe_github_auth\)/);
+ assert.match(discord,/spawn_blocking\(move\|\|update_activity/);
+});
+test('workspace opening and heavy frontend modules avoid synchronous initial rendering',()=>{
+ const workspace=read('src-tauri/src/workspace.rs'),app=read('src/App.tsx');
+ assert.match(workspace,/pub async fn set_workspace/);
+ assert.match(workspace,/spawn_blocking\(move \|\| tree_for_roots/);
+ assert.match(workspace,/e\.file_type\(\)/);
+ assert.match(app,/palette\?\[/);
+ assert.match(app,/modifiedPaths\.has\(node\.path\)/);
+ assert.match(read('src/components/EditorPane.tsx'),/lazy\(\(\)=>import\('@monaco-editor\/react'\)\)/);
+ assert.match(read('src/components/TerminalPanel.tsx'),/import\('@xterm\/xterm'\)/);
+});

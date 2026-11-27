@@ -171,13 +171,16 @@ fn valid_login(s:&str)->bool{
 #[derive(Serialize)]
 pub struct GithubAuth {pub connected:bool,pub user:String,pub cli_available:bool}
 #[tauri::command]
-pub fn github_auth_status()->GithubAuth{
+pub async fn github_auth_status()->Result<GithubAuth,String>{
+ tauri::async_runtime::spawn_blocking(probe_github_auth).await.map_err(|e|e.to_string())
+}
+fn probe_github_auth()->GithubAuth{
  let probe=Command::new("gh").args(["auth","status"]).output();
  let cli_available=probe.is_ok();
- let user=Command::new("gh").args(["api","user","--jq",".login"]).output()
+ let user=if !probe.as_ref().map(|o|o.status.success()).unwrap_or(false){String::new()}else{Command::new("gh").args(["api","user","--jq",".login"]).output()
   .ok().filter(|o|o.status.success())
   .map(|o|String::from_utf8_lossy(&o.stdout).trim().to_string())
-  .unwrap_or_default();
+  .unwrap_or_default()};
  GithubAuth{connected:!user.is_empty(),user,cli_available}
 }
 

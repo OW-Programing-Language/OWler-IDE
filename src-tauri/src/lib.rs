@@ -13,7 +13,7 @@ pub struct AppState {
  pub workspace:Mutex<Option<PathBuf>>,
  pub roots:Mutex<Vec<PathBuf>>,
  pub sessions:Mutex<HashMap<String,Arc<terminal::TerminalSession>>>,
- pub discord:Mutex<discord::Discord>,
+ pub discord:Arc<Mutex<discord::Discord>>,
  pub runtime_extensions:Mutex<HashMap<PathBuf,Vec<PathBuf>>>,
 }
 
@@ -29,7 +29,7 @@ pub fn run(){
    .plugin(tauri_plugin_updater::Builder::new().build());
  }
  builder
- .manage(AppState{workspace:Mutex::new(None),roots:Mutex::new(Vec::new()),sessions:Mutex::new(HashMap::new()),discord:Mutex::new(discord::Discord::default()),runtime_extensions:Mutex::new(HashMap::new())})
+ .manage(AppState{workspace:Mutex::new(None),roots:Mutex::new(Vec::new()),sessions:Mutex::new(HashMap::new()),discord:Arc::new(Mutex::new(discord::Discord::default())),runtime_extensions:Mutex::new(HashMap::new())})
  .invoke_handler(tauri::generate_handler![
     workspace::set_workspace,workspace::get_workspace,workspace::list_files,
     workspace::read_file,workspace::write_file,workspace::write_file_checked,workspace::sync_workspace,workspace::new_entry,

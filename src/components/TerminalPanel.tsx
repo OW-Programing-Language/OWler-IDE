@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
-import {Terminal} from '@xterm/xterm';
-import {FitAddon} from '@xterm/addon-fit';
+import type {Terminal} from '@xterm/xterm';
+import type {FitAddon} from '@xterm/addon-fit';
 import {listen} from '@tauri-apps/api/event';
 import {ChevronDown,Maximize2,Plus,Square,TerminalSquare,X,Command,Code2,Zap} from 'lucide-react';
 import {call,isDesktop,type TerminalChunk,type TerminalExit} from '../lib/api';
@@ -13,7 +13,10 @@ function SessionView({session,visible}:{session:Session;visible:boolean}){
  const term=useRef<Terminal|null>(null);
  const fit=useRef<FitAddon|null>(null);
  useEffect(()=>{
-  if(!element.current)return;
+  let disposed=false;
+  let cleanup:(()=>void)|undefined;
+  void Promise.all([import('@xterm/xterm'),import('@xterm/addon-fit')]).then(([{Terminal},{FitAddon}])=>{
+  if(disposed||!element.current)return;
   const t=new Terminal({fontFamily:'Cascadia Code,JetBrains Mono,Consolas,monospace',fontSize:12.5,lineHeight:1.48,cursorBlink:true,scrollback:4000,theme:{background:'#0b101b',foreground:'#d3dceb',cursor:'#a78bfa',selectionBackground:'#48406b',black:'#172032',red:'#f08392',green:'#86d0a3',yellow:'#edd39b',blue:'#8ab9f8',magenta:'#c9a2fd',cyan:'#81dcd3',white:'#dce6f4'}});
   const f=new FitAddon(); t.loadAddon(f);t.open(element.current);fit.current=f;term.current=t;
   const resize=()=>{try{f.fit();if(isDesktop)void call('terminal_resize',{sessionId:session.id,cols:t.cols,rows:t.rows}).catch(()=>{});}catch{}};
@@ -42,7 +45,9 @@ function SessionView({session,visible}:{session:Session;visible:boolean}){
   });
   void listen<TerminalExit>('terminal-exit',e=>{if(e.payload.session_id===session.id)t.writeln(`\r\n\x1b[38;2;107;122;146m[process exited ${e.payload.code}]\x1b[0m`)}).then(fn=>{if(active)unExit=fn;else fn()});
   const observer=new ResizeObserver(resize);observer.observe(element.current);
-  return()=>{active=false;unData?.();unExit?.();observer.disconnect();disposable.dispose();t.dispose();};
+  cleanup=()=>{active=false;unData?.();unExit?.();observer.disconnect();disposable.dispose();t.dispose();term.current=null;fit.current=null;};
+  }).catch(error=>{if(!disposed&&element.current)element.current.textContent='Could not load terminal: '+String(error)});
+  return()=>{disposed=true;cleanup?.()};
  },[session.id,session.name]);
  useEffect(()=>{if(visible){const id=requestAnimationFrame(()=>{try{fit.current?.fit()}catch{}});return()=>cancelAnimationFrame(id)}},[visible]);
  return <div className="terminal-viewport" style={{display:visible?'block':'none'}} ref={element}/>;

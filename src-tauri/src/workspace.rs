@@ -85,28 +85,46 @@ pub fn existing_ow(root: &Path, entry: &str) -> Result<PathBuf, String> {
 
 fn scan(base: &Path, dir: &Path, depth: usize, prefix: &str) -> Vec<FileNode> {
     if depth == 0 { return vec![]; }
-    let mut entries: Vec<_> = fs::read_dir(dir).ok().into_iter().flatten().filter_map(Result::ok).collect();
-    entries.sort_by_key(|e| (!e.path().is_dir(), e.file_name().to_string_lossy().to_lowercase()));
-    entries.into_iter().filter_map(|e| {
-        let name = e.file_name().to_string_lossy().to_string();
-        if [".git", "node_modules", "target", "dist", ".idea", ".next", "build", ".DS_Store"].contains(&name.as_str()) { return None; }
-        let path = e.path();
-        if name == "deps" && dir.file_name().and_then(|n| n.to_str()) == Some(".ow") { return None; }
-        if path.is_symlink() { return None; }
-        let directory = path.is_dir();
+    // Read each entry's type once. Previously sort_by_key repeatedly called
+    // path.is_dir(), causing many extra filesystem metadata requests.
+    let mut entries: Vec<_> = fs::read_dir(dir).ok().into_iter().flatten().filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if [".git", "node_modules", "target", "dist", ".idea", ".next", "build", ".DS_Store"].contains(&name.as_str()) { return None; }
+            if name == "deps" && dir.file_name().and_then(|n| n.to_str()) == Some(".ow") { return None; }
+            let kind = e.file_type().ok()?;
+            if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) { return None; }
+            let lower = name.to_lowercase();
+            Some((!kind.is_dir(), lower, name, e.path()))
+        }).collect();
+    entries.sort_by(|a,b| (&a.0,&a.1,&a.2).cmp(&(&b.0,&b.1,&b.2)));
+    entries.into_iter().filter_map(|(file,_,name,path)| {
+        let directory = !file;
         let rel = path.strip_prefix(base).ok()?.to_string_lossy().replace('\\', "/");
         let full = if prefix.is_empty() { rel } else { format!("{prefix}/{rel}") };
         Some(FileNode { name, path: full, directory, children: if directory {scan(base, &path, depth - 1, prefix)} else {vec![]} })
     }).collect()
 }
 
+async fn scan_roots(roots: Vec<PathBuf>) -> Result<Vec<FileNode>,String> {
+    tauri::async_runtime::spawn_blocking(move || tree_for_roots(&roots)).await.map_err(|e|e.to_string())
+}
+
+async fn canonical_directory(path: String) -> Result<PathBuf,String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = fs::canonicalize(path).map_err(|e| e.to_string())?;
+        if !dir.is_dir() { return Err("Select an existing directory".into()); }
+        Ok(dir)
+    }).await.map_err(|e|e.to_string())?
+}
+
 #[tauri::command]
-pub fn set_workspace(path: String, state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
-    let dir = fs::canonicalize(&path).map_err(|e| e.to_string())?;
-    if !dir.is_dir() { return Err("Select an existing directory".into()); }
+pub async fn set_workspace(path: String, state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
+    let dir = canonical_directory(path).await?;
+    let tree = scan_roots(vec![dir.clone()]).await?;
     *state.workspace.lock().map_err(|e| e.to_string())? = Some(dir.clone());
-    *state.roots.lock().map_err(|e| e.to_string())? = vec![dir.clone()];
-    Ok(scan(&dir, &dir, 8, ""))
+    *state.roots.lock().map_err(|e| e.to_string())? = vec![dir];
+    Ok(tree)
 }
 
 #[tauri::command]
@@ -157,10 +175,10 @@ pub fn set_primary_root(path: String, state: State<'_, AppState>) -> Result<Vec<
 }
 
 #[tauri::command]
-pub fn list_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
-    let roots = state.roots.lock().map_err(|e| e.to_string())?;
-    if roots.is_empty() { let r = root(&state)?; return Ok(scan(&r, &r, 8, "")); }
-    Ok(tree_for_roots(&roots))
+pub async fn list_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
+    let mut roots = state.roots.lock().map_err(|e| e.to_string())?.clone();
+    if roots.is_empty() { roots.push(root(&state)?); }
+    scan_roots(roots).await
 }
 
 
