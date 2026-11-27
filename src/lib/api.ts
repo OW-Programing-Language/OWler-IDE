@@ -9,14 +9,17 @@ export type BranchList = {current:string;branches:string[]};
 export type GithubAuth = {connected:boolean;user:string;cli_available:boolean};
 export type Collaborator = {login:string;permission:string;avatarUrl:string;htmlUrl:string};
 export const COLLAB_PERMISSIONS=['pull','triage','push','maintain','admin'] as const;
-export type ToolchainInfo = {source:string;available:boolean;version:string;build_note:string};
+export type ToolchainInfo = {source:string;available:boolean;version:string;build_note:string;revision?:string|null};
 export type TerminalChunk = {session_id:string;data:string;seq:number};
 export type OwDiagnostic = {file:string;line:number;column:number;severity:'error'|'warning';message:string};
 export type OwCheckReport = {ok:boolean;output:string;diagnostics:OwDiagnostic[]};
 export type OwTestResult = {name:string;file:string;passed:boolean;message:string};
 export type OwTestReport = {ok:boolean;passed:number;failed:number;output:string;results:OwTestResult[];exit_code:number|null};
 export type TerminalExit = {session_id:string;code:number};
-export type Tab = {path:string;content:string;saved:string};
+export type DiskState='changed'|'missing'|'unreadable';
+export type Tab = {path:string;content:string;saved:string;diskState?:DiskState};
+export type DiskUpdate={path:string;revision:string}&({status:'present';text:string}|{status:'missing'|'unreadable'});
+export type WorkspaceSnapshot={tree:FileNode[]|null;tree_revision:string;files:DiskUpdate[]};
 export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 export async function call<T>(command:string,args:Record<string,unknown>={}):Promise<T>{

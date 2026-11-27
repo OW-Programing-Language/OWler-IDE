@@ -1,0 +1,4 @@
+@Service
+class GreetingService:
+  fn message() -> string:
+    return: "Hello from Night and OW"

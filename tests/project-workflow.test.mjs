@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
+import ts from 'typescript';
 
 const read=path=>readFileSync(resolve(import.meta.dirname,'..',path),'utf8');
 
@@ -57,7 +58,7 @@ test('reload updates opened tabs without discarding unsaved changes',()=>{
 
 test('bundled OW revision contains project dependency resolver',()=>{
  const script=read('scripts/bundle-ow.mjs');
- assert.match(script,/117884cfa873d38fccc312fc3a1f3af5552e1311/);
+ assert.match(script,/377b7c18981b9028e7f9dbbda4f6bf6aa8bfed32/);
 });
 
 test('right-click dependencies.yml invokes the real OW dependency update command',()=>{
@@ -81,6 +82,69 @@ test('unsaved dependency changes require confirmation before the manifest is sav
  assert.match(app,/const modified=tabs\.find/);
  assert.match(app,/if\(modified&&!confirm/);
  assert.match(app,/disk!==modified\.saved&&!confirm/);
- assert.match(app,/write_file',\{path,content:modified\.content\}/);
+ assert.match(app,/write_file_checked',\{path,content:modified\.content/);
  assert.match(app,/reloadingDependencies/);
+});
+
+test('live disk reconciliation protects dirty buffers and stale observations',async()=>{
+ const source=ts.transpileModule(read('src/lib/liveSync.ts'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
+ const {reconcileDiskTabs}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+ const path='src/main.ow', requested=new Map([[path,'original']]);
+ const disk=new Map([[path,{path,revision:'2',status:'present',text:'agent edit'}]]);
+ const clean={path,content:'original',saved:'original'};
+ const dirty={...clean,content:'my edit'};
+ assert.deepEqual(reconcileDiskTabs([clean],requested,disk)[0],{path,content:'agent edit',saved:'agent edit',diskState:undefined});
+ const conflict=reconcileDiskTabs([dirty],requested,disk)[0];
+ assert.equal(conflict.content,'my edit');assert.equal(conflict.saved,'original');assert.equal(conflict.diskState,'changed');
+ const stale={path,content:'new save',saved:'new save'};
+ assert.equal(reconcileDiskTabs([stale],requested,disk)[0],stale);
+ const absent=new Map([[path,{path,revision:'3',status:'missing'}]]);
+ assert.equal(reconcileDiskTabs([dirty],requested,absent)[0].diskState,'missing');
+ assert.equal(reconcileDiskTabs([dirty],requested,absent)[0].content,'my edit');
+ const unreadable=new Map([[path,{path,revision:'4',status:'unreadable'}]]);
+ assert.equal(reconcileDiskTabs([clean],requested,unreadable)[0].diskState,'unreadable');
+ const unchanged=[clean];
+ assert.equal(reconcileDiskTabs(unchanged,requested,new Map()),unchanged);
+});
+test('desktop explorer polls independently of editor and protects saves',()=>{
+ const app=read('src/App.tsx'),backend=read('src-tauri/src/workspace.rs');
+ assert.match(app,/sync_workspace/);
+ assert.match(app,/setTimeout\(tick,1200\)/);
+ assert.match(app,/reconcileDiskTabs/);
+ assert.match(app,/write_file_checked/);
+ assert.match(backend,/spawn_blocking/);
+ assert.match(backend,/checked_write/);
+ assert.match(read('src/components/EditorPane.tsx'),/Reload disk version/);
+});
+
+test('workspace creation and cloning do not replace the live roots before user opens the project',()=>{
+ const rust=read('src-tauri/src/workspace.rs'),git=read('src-tauri/src/git.rs');
+ const create=rust.slice(rust.indexOf('pub fn create_project('),rust.indexOf('#[cfg(test)]',rust.indexOf('pub fn create_project(')));
+ const clone=git.slice(git.indexOf('pub fn git_clone('),git.indexOf('/// Publish an existing',git.indexOf('pub fn git_clone(')));
+ assert.doesNotMatch(create,/state\.roots\.lock/);
+ assert.doesNotMatch(clone,/state\.workspace\.lock/);
+});
+
+test('cold start defers probes and loads compiler only once',()=>{
+ const app=read('src/App.tsx'),ow=read('src-tauri/src/ow.rs'),git=read('src-tauri/src/git.rs'),discord=read('src-tauri/src/discord.rs');
+ assert.match(app,/const restore=setTimeout/);
+ assert.match(app,/const probe=setTimeout/);
+ assert.match(app,/if\(section==='git'\)void refreshAuth/);
+ assert.match(app,/section==='tools'\)void call<CliAvailability\[\]>/);
+ assert.match(ow,/pub async fn ow_toolchain_info/);
+ assert.match(ow,/spawn_blocking\(move\|\|probe_toolchain/);
+ assert.match(ow,/pub async fn environment_status/);
+ assert.doesNotMatch(ow.slice(ow.indexOf('fn detect_cli_tools'),ow.indexOf('mod environment_tests')),/ow_toolchain_info/);
+ assert.match(git,/spawn_blocking\(probe_github_auth\)/);
+ assert.match(discord,/spawn_blocking\(move\|\|update_activity/);
+});
+test('workspace opening and heavy frontend modules avoid synchronous initial rendering',()=>{
+ const workspace=read('src-tauri/src/workspace.rs'),app=read('src/App.tsx');
+ assert.match(workspace,/pub async fn set_workspace/);
+ assert.match(workspace,/spawn_blocking\(move \|\| tree_for_roots/);
+ assert.match(workspace,/e\.file_type\(\)/);
+ assert.match(app,/palette\?\[/);
+ assert.match(app,/modifiedPaths\.has\(node\.path\)/);
+ assert.match(read('src/components/EditorPane.tsx'),/lazy\(\(\)=>import\('@monaco-editor\/react'\)\)/);
+ assert.match(read('src/components/TerminalPanel.tsx'),/import\('@xterm\/xterm'\)/);
 });

@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useMemo,useState} from 'react';
+import {Fragment,useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {open} from '@tauri-apps/plugin-dialog';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {
@@ -11,13 +11,14 @@ import {
 } from 'lucide-react';
 import EditorPane from './components/EditorPane';
 import OwTestPanel from './components/OwTestPanel';
+import {reconcileDiskTabs} from './lib/liveSync';
 import {discoverOwTests,isOwTestFile} from './lib/owTests';
 import {TerminalPanel,type Session} from './components/TerminalPanel';
-import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type OwTestReport,type OwTestResult,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
+import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type DiskUpdate,type WorkspaceSnapshot,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type OwTestReport,type OwTestResult,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
 
 type Section='files'|'search'|'git'|'tools';
 type Toast={id:number;message:string;error?:boolean};
-type NewProject={name:string;kind:'console'|'web'|'ui'};
+type NewProject={name:string;kind:'console'|'web'|'ui'|'night'|'flow'|'owcord'};
 const org='https://github.com/OW-Programing-Language';
 const night='https://github.com/OW-Programing-Language/night';
 const emptyGit:GitSnapshot={branch:'',remote:'',changes:[],last_commits:[],initialized:false};
@@ -39,9 +40,17 @@ export default function App(){
  const [settings,setSettings]=useState(()=>{try{return {fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true,...JSON.parse(localStorage.getItem('owler:settings')||'{}')}}catch{return {fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true}}});
  const updateSetting=useCallback((k:string,v:unknown)=>setSettings((s:Record<string,unknown>)=>{const next={...s,[k]:v};localStorage.setItem('owler:settings',JSON.stringify(next));return next}),[]);
  const [tabs,setTabs]=useState<Tab[]>([]);
+ const tabsRef=useRef(tabs);tabsRef.current=tabs;
+ const rootsRef=useRef(roots);rootsRef.current=roots;
+ const syncEpoch=useRef(0);
+ const syncPaused=useRef(0);
+ const gitRefreshId=useRef(0);
+ const [syncStatus,setSyncStatus]=useState<'idle'|'live'|'error'>('idle');
  const [active,setActive]=useState('');
  const [section,setSection]=useState<Section>('files');
  const [toolchain,setToolchain]=useState<ToolchainInfo>(blankToolchain);
+ const [runtimeJars,setRuntimeJars]=useState<string[]>([]);
+ useEffect(()=>{let current=true;setRuntimeJars([]);if(workspace)void call<string[]>('get_runtime_extensions').then(v=>{if(current)setRuntimeJars(v)}).catch(()=>{});return()=>{current=false}},[workspace]);
  const [environment,setEnvironment]=useState<CliAvailability[]>([]);
  const [git,setGit]=useState<GitSnapshot>(emptyGit);
  const [gitBusy,setGitBusy]=useState(false);
@@ -122,21 +131,72 @@ export default function App(){
  },[toast]);
  const refreshGit=useCallback(async()=>{
   if(!isDesktop)return;
-  try{setGit(await call<GitSnapshot>('git_status'))}catch{setGit(emptyGit)}
-  try{setBranches(await call<BranchList>('git_branches'))}catch{setBranches({current:'',branches:[]})}
+  const id=++gitRefreshId.current,epoch=syncEpoch.current;
+  const [gitResult,branchResult]=await Promise.all([
+   call<GitSnapshot>('git_status').catch(()=>emptyGit),
+   call<BranchList>('git_branches').catch(()=>({current:'',branches:[]}))
+  ]);
+  if(id===gitRefreshId.current&&epoch===syncEpoch.current){setGit(gitResult);setBranches(branchResult)}
  },[]);
+
+ // Poll only while a desktop workspace is open. One request at a time,
+ // background Rust traversal, unchanged tree/content omitted from IPC.
+ // The cached observations are reapplied to the current editor state so an
+ // undo or save can resolve a conflict without requiring another disk edit.
+ const rootKey=JSON.stringify(roots);
+ useEffect(()=>{
+  if(!isDesktop||!roots.length){setSyncStatus('idle');return}
+  let cancelled=false,busy=false,timer:ReturnType<typeof setTimeout>|undefined;
+  const expectedRoots=JSON.parse(rootKey) as string[];
+  let treeRevision:string|undefined;
+  const disk=new Map<string,DiskUpdate>();
+  let ticks=0,gitBusy=false;
+  const tick=async()=>{
+   if(cancelled||busy)return;
+   busy=true;
+   const epoch=syncEpoch.current;
+   try{
+    if(syncPaused.current)return;
+    const requested=new Map(tabsRef.current.map(t=>[t.path,t.saved]));
+    for(const path of disk.keys())if(!requested.has(path))disk.delete(path);
+    const known=Object.fromEntries([...disk].map(([path,value])=>[path,value.revision]));
+    const snapshot=await call<WorkspaceSnapshot>('sync_workspace',{
+     paths:[...requested.keys()],known,treeRevision,expectedRoots
+    });
+    if(cancelled||epoch!==syncEpoch.current||syncPaused.current)return;
+    treeRevision=snapshot.tree_revision;
+    if(snapshot.tree)setTree(snapshot.tree);
+    for(const update of snapshot.files)disk.set(update.path,update);
+    setTabs(previous=>reconcileDiskTabs(previous,requested,disk));
+    setSyncStatus('live');
+    if((snapshot.tree||snapshot.files.length||++ticks%5===0)&&!gitBusy){gitBusy=true;void refreshGit().finally(()=>{gitBusy=false})}
+   }catch{
+    if(!cancelled&&epoch===syncEpoch.current)setSyncStatus('error');
+   }finally{
+    busy=false;
+    if(!cancelled)timer=setTimeout(tick,1200);
+   }
+  };
+  const focus=()=>{if(timer)clearTimeout(timer);void tick()};
+  window.addEventListener('focus',focus);
+  void tick();
+  return()=>{cancelled=true;if(timer)clearTimeout(timer);window.removeEventListener('focus',focus)};
+ },[rootKey,refreshGit]);
+
  // Refresh the explorer AND all open editor buffers from disk. Claude/Codex may
  // edit files outside of Monaco, so refreshing only the tree is insufficient.
  // Never overwrite an editor buffer that has unsaved user changes.
  const reloadProject=useCallback(async(silent=false)=>{
   if(!workspace){toast('Open an OW project to reload',true);return}
   if(!isDesktop){toast('Reload Project requires the desktop app',true);return}
+  const epoch=syncEpoch.current;
   try{
    const freshTree=await call<FileNode[]>('list_files');
    const disk=await Promise.all(tabs.map(async tab=>{
     try{return {path:tab.path,text:await call<string>('read_file',{path:tab.path}),error:false}}
     catch{return {path:tab.path,text:'',error:true}}
    }));
+   if(epoch!==syncEpoch.current)return;
    const contents=new Map(disk.filter(item=>!item.error).map(item=>[item.path,item.text]));
    const changed=tabs.filter(tab=>contents.has(tab.path)&&contents.get(tab.path)!==tab.saved);
    const protectedTabs=changed.filter(tab=>tab.content!==tab.saved);
@@ -168,7 +228,7 @@ export default function App(){
  // Reload the exact project whose manifest was right-clicked (including extra roots).
  // Save only the manifest when it has unsaved Monaco edits, never unrelated tabs.
  const reloadDependencies=useCallback(async(path:string)=>{
-  if(reloadingDependencies)return;
+  if(reloadingDependencies||syncPaused.current)return;
   if(!/^(?:@\d+\/)?dependencies\.yml$/.test(path)){
    toast('Select the project-root dependencies.yml file',true);return;
   }
@@ -176,11 +236,13 @@ export default function App(){
   const modified=tabs.find(tab=>tab.path===path&&tab.content!==tab.saved);
   if(modified&&!confirm('Save changes to dependencies.yml before reloading OW libraries?'))return;
   setReloadingDependencies(true);
+  const expectedRoots=[...rootsRef.current];
+  syncEpoch.current++;syncPaused.current++;
   try{
    if(modified){
     const disk=await call<string>('read_file',{path});
     if(disk!==modified.saved&&!confirm('dependencies.yml was also modified outside OWler. Overwrite the external changes with the open editor version?'))return;
-    await call('write_file',{path,content:modified.content});
+    await call('write_file_checked',{path,content:modified.content,expectedContent:disk,expectedRoots});
     setTabs(previous=>previous.map(tab=>tab.path===path?{...tab,saved:modified.content}:tab));
    }
    toast('Reloading OW dependencies from dependencies.yml…');
@@ -188,13 +250,13 @@ export default function App(){
    await reloadProject(true);
    toast('OW dependencies reloaded · dependencies.lock.yml updated');
   }catch(e){toast('Could not reload dependencies: '+String(e).slice(0,350),true)}
-  finally{setReloadingDependencies(false)}
+  finally{syncPaused.current--;syncEpoch.current++;setReloadingDependencies(false)}
  },[reloadingDependencies,tabs,reloadProject,toast]);
  const refreshAuth=useCallback(async()=>{
   if(!isDesktop)return;
   try{setGithubAuth(await call<GithubAuth>('github_auth_status'))}catch{/* gh not installed */}
  },[]);
- useEffect(()=>{void refreshAuth()},[refreshAuth]);
+ useEffect(()=>{if(section==='git')void refreshAuth()},[section,refreshAuth]);
  useEffect(()=>{setMainEntry(workspace?localStorage.getItem('owler:main:'+workspace)||'':'')},[workspace]);
  useEffect(()=>{if(roots.length>1)setExpanded(p=>{const n=new Set(p);n.add('');roots.forEach((_,i)=>{if(i>0)n.add('@'+i)});return n})},[roots.length]);
  // Discord Rich Presence — "Playing OWler IDE" + "Editing <file>".
@@ -203,41 +265,54 @@ export default function App(){
    if(settings.discord===false){void call('discord_clear').catch(()=>{});return}
    const details=active?`Editing ${fileName(active)}`:workspace?`Browsing ${base}`:'Idle';
    void call('discord_activity',{details,stateLine:base||undefined}).catch(()=>{});
-  },400);return()=>clearTimeout(t)},[active,workspace,settings.discord]);
+  },1500);return()=>clearTimeout(t)},[active,workspace,settings.discord]);
  const setAsMain=useCallback((node:FileNode)=>{if(!workspace)return;localStorage.setItem('owler:main:'+workspace,node.path);setMainEntry(node.path);toast(`${fileName(node.path)} is now the main entry point`)},[workspace,toast]);
  const clearMain=useCallback(()=>{if(!workspace)return;localStorage.removeItem('owler:main:'+workspace);setMainEntry('');toast('Main entry cleared — the IDE will auto-detect it')},[workspace,toast]);
  const addFolder=useCallback(async()=>{
   if(!workspace){void pickOpen();return}
   const picked=await open({directory:true,multiple:false,title:'Add a folder to this workspace'});
-  if(!picked||Array.isArray(picked))return;
-  try{const t=await call<FileNode[]>('add_root',{path:picked});setTree(t);setRoots(await call<string[]>('workspace_roots'));toast(`Added ${String(picked).split(/[\\/]/).pop()}`)}catch(e){toast(String(e),true)}
+  if(!picked||Array.isArray(picked)||syncPaused.current)return;
+  syncEpoch.current++;syncPaused.current++;
+  try{const t=await call<FileNode[]>('add_root',{path:picked});setTree(t);setRoots(await call<string[]>('workspace_roots'));toast(`Added ${String(picked).split(/[\\/]/).pop()}`)}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[workspace,toast]);
  const removeFolder=useCallback(async(abs:string)=>{
-  try{const t=await call<FileNode[]>('remove_root',{path:abs});setTree(t);const rs=await call<string[]>('workspace_roots');setRoots(rs);if(rs.length){setWorkspacePath(rs[0]);void refreshGit()}else{setWorkspacePath('')}toast('Removed folder from workspace')}catch(e){toast(String(e),true)}
+  if(syncPaused.current)return;
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Changing workspace roots closes open tabs. Discard unsaved edits?'))return;
+  syncEpoch.current++;syncPaused.current++;
+  try{const t=await call<FileNode[]>('remove_root',{path:abs});setTree(t);const rs=await call<string[]>('workspace_roots');setTabs([]);setActive('');setRoots(rs);if(rs.length){setWorkspacePath(rs[0]);void refreshGit()}else{setWorkspacePath('')}toast('Removed folder from workspace')}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[refreshGit,toast]);
  const makePrimaryFolder=useCallback(async(abs:string)=>{
-  try{const t=await call<FileNode[]>('set_primary_root',{path:abs});setTree(t);setRoots(await call<string[]>('workspace_roots'));setWorkspacePath(abs);void refreshGit();toast(`${abs.split(/[\\/]/).pop()} is now the primary folder`)}catch(e){toast(String(e),true)}
+  if(syncPaused.current)return;
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Changing workspace roots closes open tabs. Discard unsaved edits?'))return;
+  syncEpoch.current++;syncPaused.current++;
+  try{const t=await call<FileNode[]>('set_primary_root',{path:abs});setTree(t);setTabs([]);setActive('');setRoots(await call<string[]>('workspace_roots'));setWorkspacePath(abs);void refreshGit();toast(`${abs.split(/[\\/]/).pop()} is now the primary folder`)}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[refreshGit,toast]);
  // Map a tree root node (path '' or '@i') to its absolute folder path.
  const rootAbs=useCallback((nodePath:string)=>{const m=nodePath.match(/^@(\d+)$/);return roots[m?Number(m[1]):0]||''},[roots]);
  const isRootNode=useCallback((node:FileNode)=>node.directory&&(node.path===''||/^@\d+$/.test(node.path)),[]);
  const openWorkspace=useCallback(async(path:string)=>{
-  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots([path]);setTree(entries);setTabs([]);setActive('');setProblems([]);setTestReport(null);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
-   const snapshot=await call<GitSnapshot>('git_status');setGit(snapshot);
-   toast(`Opened ${path.split(/[\\/]/).pop()}`);
-  }catch(e){toast(String(e),true)}
+  if(syncPaused.current)return false;
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Open another project and discard unsaved edits?'))return false;
+  syncEpoch.current++;syncPaused.current++;
+  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots(await call<string[]>('workspace_roots'));setTree(entries);setTabs([]);setActive('');setProblems([]);setTestReport(null);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
+   // Live sync refreshes Git after the explorer is available; don't block opening.
+   toast(`Opened ${path.split(/[\\/]/).pop()}`);return true;
+  }catch(e){toast(String(e),true);return false}finally{syncPaused.current--;syncEpoch.current++}
  },[toast]);
  useEffect(()=>{
   if(!isDesktop)return;
-  void call<ToolchainInfo>('ow_toolchain_info').then(setToolchain).catch(()=>{});
-  void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(()=>{});
-  const path=localStorage.getItem('owler:last-workspace');if(path)void openWorkspace(path);
+  // Let the first frame paint before restoring a project or starting a JVM.
+  const restore=setTimeout(()=>{const path=localStorage.getItem('owler:last-workspace');if(path&&!rootsRef.current.length&&!syncPaused.current)void openWorkspace(path)},100);
+  const probe=setTimeout(()=>{void call<ToolchainInfo>('ow_toolchain_info').then(setToolchain).catch(()=>setToolchain({...blankToolchain,source:'Unavailable'}))},750);
+  return()=>{clearTimeout(restore);clearTimeout(probe)};
  },[openWorkspace]);
+ useEffect(()=>{if(isDesktop&&section==='tools')void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(()=>{})},[section]);
  const pickOpen=useCallback(async()=>{if(!isDesktop){toast('Open the desktop app to access local folders',true);return}const selected=await open({directory:true,multiple:false,title:'Open a folder in Owler'});if(typeof selected==='string')void openWorkspace(selected)},[openWorkspace,toast]);
  const openFile=useCallback(async(path:string)=>{
   setSection('files');
   if(tabs.some(t=>t.path===path)){setActive(path);return}
-  try{const content=await call<string>('read_file',{path});setTabs(t=>[...t,{path,content,saved:content}]);setActive(path)}catch(e){toast(String(e),true)}
+  const epoch=syncEpoch.current;
+  try{const content=await call<string>('read_file',{path});if(epoch!==syncEpoch.current)return;setTabs(t=>t.some(tab=>tab.path===path)?t:[...t,{path,content,saved:content}]);setActive(path)}catch(e){toast(String(e),true)}
  },[tabs,toast]);
  const closeFile=useCallback((path:string)=>{
   const t=tabs.find(t=>t.path===path);
@@ -247,10 +322,44 @@ export default function App(){
  },[tabs,active]);
  const changeFile=useCallback((path:string,content:string)=>setTabs(ts=>ts.map(t=>t.path===path?{...t,content}:t)),[]);
  const saveAll=useCallback(async()=>{
-  const dirty=tabs.filter(t=>t.content!==t.saved);
+  const dirty=tabsRef.current.filter(t=>t.content!==t.saved);
   if(!dirty.length)return true;
-  try{for(const t of dirty)await call('write_file',{path:t.path,content:t.content});setTabs(ts=>ts.map(t=>{const saved=dirty.find(d=>d.path===t.path);return saved?{...t,saved:saved.content}:t}));void refreshGit();toast(`Saved ${dirty.length} file${dirty.length===1?'':'s'}`);return true;}catch(e){toast(String(e),true);return false;}
- },[tabs,refreshGit,toast]);
+  if(syncPaused.current)return false;
+  const expectedRoots=[...rootsRef.current];
+  syncEpoch.current++;syncPaused.current++;
+  try{
+   for(const t of dirty){
+    let expected:string|null=t.saved;
+    if(t.diskState==='missing'){
+     if(!confirm(t.path+' was deleted or renamed outside OWler. Recreate it with your editor contents?'))return false;
+     expected=null;
+    }else{
+     const disk=await call<string>('read_file',{path:t.path});
+     if(disk!==t.saved){
+      if(!confirm(t.path+' changed outside OWler. Overwrite the latest disk version with your editor contents? Cancel to keep both versions.'))return false;
+      expected=disk;
+     }
+    }
+    await call('write_file_checked',{path:t.path,content:t.content,expectedContent:expected,expectedRoots});
+    setTabs(ts=>ts.map(tab=>tab.path===t.path?{...tab,saved:t.content,diskState:undefined}:tab));
+   }
+   void refreshGit();toast('Saved '+dirty.length+' file(s)');return true;
+  }catch(e){toast(String(e),true);return false;}
+  finally{syncPaused.current--;syncEpoch.current++}
+ },[refreshGit,toast]);
+ const reloadDiskFile=useCallback(async(path:string)=>{
+  const tab=tabsRef.current.find(t=>t.path===path);
+  if(!tab)return;
+  if(tab.content!==tab.saved&&!confirm('Discard unsaved editor changes and load the current disk version of '+path+'?'))return;
+  const epoch=syncEpoch.current;
+  try{
+   const text=await call<string>('read_file',{path});
+   if(epoch!==syncEpoch.current)return;
+   setTabs(previous=>previous.map(t=>t.path===path&&t.content===tab.content&&t.saved===tab.saved?
+    {...t,content:text,saved:text,diskState:undefined}:t));
+   toast('Reloaded '+path);
+  }catch(e){toast('Cannot reload disk version: '+String(e),true)}
+ },[toast]);
  const runOwTests=useCallback(async(target='.',filter?:string)=>{
   if(!workspace){toast('Open an OW project before running tests',true);return}
   if(testBusy)return;
@@ -464,11 +573,25 @@ export default function App(){
    if(destDir)setExpanded(p=>new Set(p).add(destDir));await refreshTree();toast(`Moved ${name}`)
   }catch(e){toast(String(e),true)}
  },[active,refreshTree,toast]);
+ const selectRuntimeJars=useCallback(async()=>{
+  if(!workspace)return;
+  try{
+   const chosen=await open({multiple:true,filters:[{name:'JVM runtime extension',extensions:['jar']}],title:'Select trusted runtime extension JARs'});
+   if(!chosen)return;
+   const paths=Array.isArray(chosen)?chosen:[chosen];
+   if(!confirm('Runtime JARs execute Java code with your account permissions. Only enable trusted files. Replace the selected JARs for this project?'))return;
+   setRuntimeJars(await call<string[]>('set_runtime_extensions',{paths,expectedRoot:workspace}));
+   toast('Runtime extensions configured for this session');
+  }catch(e){toast(String(e),true)}
+ },[workspace,toast]);
+ const clearRuntimeJars=useCallback(async()=>{
+  try{setRuntimeJars(await call<string[]>('set_runtime_extensions',{paths:[],expectedRoot:workspace}));toast('Runtime extensions cleared')}catch(e){toast(String(e),true)}
+ },[workspace,toast]);
  const createProject=useCallback(async()=>{
   if(!isDesktop){toast('Use the desktop app',true);return}
   const parent=await open({directory:true,multiple:false,title:'Choose where to create the OW project'});
   if(typeof parent!=='string')return;
-  try{const path=await call<string>('create_project',{baseDir:parent,name:newProject.name,kind:newProject.kind});setShowNewProject(false);await openWorkspace(path);await refreshTree();void openFile('src/main.ow')}catch(e){toast(String(e),true)}
+  try{const path=await call<string>('create_project',{baseDir:parent,name:newProject.name,kind:newProject.kind});setShowNewProject(false);if(await openWorkspace(path)){const content=await call<string>('read_file',{path:'src/main.ow'});setTabs([{path:'src/main.ow',content,saved:content}]);setActive('src/main.ow')}}catch(e){toast(String(e),true)}
  },[newProject,openWorkspace,openFile,refreshTree,toast]);
  const cloneProject=useCallback(async()=>{
   const parent=await open({directory:true,multiple:false,title:'Choose where to clone this GitHub repository'});
@@ -487,7 +610,7 @@ export default function App(){
   for(const file of leaves){try{const text=await call<string>('read_file',{path:file.path});const lines=text.split('\n');for(let i=0;i<lines.length;i++){if(lines[i].toLowerCase().includes(search.toLowerCase())){result.push({path:file.path,line:i+1,text:lines[i].trim().slice(0,180)});if(result.length>=250)break}}if(result.length>=250)break;}catch{/* ignore non-text and large files */}}
   setSearchResults(result);setSearchBusy(false);
  },[search,workspace,tree]);
- const paletteItems=useMemo(()=>[
+ const paletteItems=useMemo(()=>palette?[
   {name:'Open folder',hint:'File',run:pickOpen},
   {name:'New OW project',hint:'File',run:()=>setShowNewProject(true)},
   {name:'New OWUnit test',hint:'Test',run:()=>{void createOwUnitTest()}},
@@ -515,7 +638,7 @@ export default function App(){
   {name:'Push to GitHub',hint:'Git',run:()=>{void gitAction('push')}},
   {name:'Pull from GitHub',hint:'Git',run:()=>{void gitAction('pull')}},
   ...flattenNodes(tree).filter(n=>!n.directory).map(n=>({name:n.path,hint:'File',run:()=>{void openFile(n.path)}}))
- ],[pickOpen,saveAll,runOw,runWebApp,addFolder,startSession,gitAction,openFile,reloadProject,createOwUnitTest,runOwTests,active,tree,workspace]);
+ ]:[],[palette,pickOpen,saveAll,runOw,runWebApp,addFolder,startSession,gitAction,openFile,reloadProject,createOwUnitTest,runOwTests,active,tree,workspace]);
  useEffect(()=>{
   const handler=(e:KeyboardEvent)=>{
    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void saveAll()}
@@ -528,14 +651,16 @@ export default function App(){
   };window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler)
  },[saveAll,runOw,reloadProject]);
 
- function TreeItem({node,depth=0}:{node:FileNode;depth?:number}){
+ const modifiedPaths=useMemo(()=>new Set(git.changes.map(c=>c.path)),[git.changes]);
+ // Render keyed rows rather than defining a new component type on every App render.
+ function renderTreeItem(node:FileNode,depth=0):React.ReactNode{
   const isExpanded=expanded.has(node.path);
-  const modified=git.changes.some(c=>c.path===node.path);
+  const modified=modifiedPaths.has(node.path);
   const dropDir=node.directory?node.path:dirname(node.path).replace(/\/$/,'');
-  return <><div className={`tree-item ${node.path===active?'selected':''} ${dropTarget===node.path?'drop-target':''}`} style={{paddingLeft:11+depth*13}} draggable onDragStart={e=>{e.stopPropagation();setDragPath(node.path);e.dataTransfer.effectAllowed='move'}} onDragEnd={()=>{setDragPath('');setDropTarget('')}} onDragOver={e=>{if(dragPath&&dragPath!==node.path){e.preventDefault();e.dataTransfer.dropEffect='move';setDropTarget(node.path)}}} onDragLeave={()=>setDropTarget(t=>t===node.path?'':t)} onDrop={e=>{e.preventDefault();e.stopPropagation();const src=dragPath;setDragPath('');setDropTarget('');if(src)void moveEntry(src,dropDir)}} onClick={()=>node.directory?setExpanded(prev=>{const n=new Set(prev);if(n.has(node.path))n.delete(node.path);else n.add(node.path);return n;}):void openFile(node.path)} onContextMenu={e=>{e.preventDefault();e.stopPropagation();setCtxMenu({x:e.clientX,y:e.clientY,node})}}>
+  return <Fragment key={node.path}><div className={`tree-item ${node.path===active?'selected':''} ${dropTarget===node.path?'drop-target':''}`} style={{paddingLeft:11+depth*13}} draggable onDragStart={e=>{e.stopPropagation();setDragPath(node.path);e.dataTransfer.effectAllowed='move'}} onDragEnd={()=>{setDragPath('');setDropTarget('')}} onDragOver={e=>{if(dragPath&&dragPath!==node.path){e.preventDefault();e.dataTransfer.dropEffect='move';setDropTarget(node.path)}}} onDragLeave={()=>setDropTarget(t=>t===node.path?'':t)} onDrop={e=>{e.preventDefault();e.stopPropagation();const src=dragPath;setDragPath('');setDropTarget('');if(src)void moveEntry(src,dropDir)}} onClick={()=>node.directory?setExpanded(prev=>{const n=new Set(prev);if(n.has(node.path))n.delete(node.path);else n.add(node.path);return n;}):void openFile(node.path)} onContextMenu={e=>{e.preventDefault();e.stopPropagation();setCtxMenu({x:e.clientX,y:e.clientY,node})}}>
    <span className="tree-chevron">{node.directory?(isExpanded?<ChevronDown size={13}/>:<ChevronRight size={13}/>):null}</span>
    <span className={`tree-icon ${isOw(node.path)?'ow':''}`}>{node.directory?isExpanded?<FolderOpen size={15}/>:<Folder size={15}/>:fileIcon(node)}</span><span className="tree-label">{node.name}</span>{node.path===mainEntry&&<span className="tree-main" title="Main entry point"><Play size={10} fill="currentColor"/></span>}{modified&&<span className="tree-modified">M</span>}
-  </div>{node.directory&&isExpanded&&node.children.map(n=><TreeItem node={n} depth={depth+1} key={n.path}/>)}</>;
+  </div>{node.directory&&isExpanded&&node.children.map(n=>renderTreeItem(n,depth+1))}</Fragment>;
  }
  const testCommand=testTarget?('ow test '+testTarget+(testFilter?' --filter '+testFilter:'')):'';
  const basename=workspace.split(/[\\/]/).filter(Boolean).pop()||'NO FOLDER';
@@ -552,7 +677,7 @@ export default function App(){
     <button disabled={!workspace} onClick={()=>{setShowFileMenu(false);void saveAll()}}><Save size={15}/> Save All <kbd>Ctrl+S</kbd></button>
    </div>}</div>
     <div className="title-project"><Code2 size={14}/><span>{workspace?basename:'Welcome to Owler'}</span><ChevronDown size={13}/></div>
-   <div className="title-right"><span className={`runtime-indicator ${toolchain.available?'ready':''}`}><span/>{toolchain.available?'OW READY':'OW TOOLCHAIN'}</span><button title="Command palette" onClick={()=>{setPalette(true);setPaletteQuery('')}}><Command size={15}/><span>Command palette</span><kbd>⌘ K</kbd></button><div className="title-avatar">OW</div></div>
+   <div className="title-right"><span className={`runtime-indicator ${toolchain.available?'ready':''}`}><span/>{toolchain.available?'OW READY':toolchain.source==='Checking...'?'OW CHECKING':'OW TOOLCHAIN'}</span><button title="Command palette" onClick={()=>{setPalette(true);setPaletteQuery('')}}><Command size={15}/><span>Command palette</span><kbd>⌘ K</kbd></button><div className="title-avatar">OW</div></div>
   </div>
   <div className="toolbar"><div className="toolbar-leading"><button title="Toggle sidebar" onClick={()=>setSidebarVisible(v=>!v)}><Menu size={16}/></button><span className="toolbar-divider"/><span className="toolbar-label">WORKSPACE</span><ChevronRight size={13}/><b>{basename}</b></div>
    <div className="toolbar-center"><button className="toolbar-action muted" onClick={()=>void runOwTests('tests')} title="Run all OWUnit tests" disabled={!workspace||testBusy}><FlaskConical size={15}/> Test</button><button className="toolbar-action muted" onClick={()=>void runOw('check')} title="Compile-time check"><Check size={15}/> Check</button><button className="toolbar-action muted" onClick={()=>void runOw('build')} title="Build native OW program (experimental LLVM subset)"><Package size={15}/> Build</button><button className="toolbar-action muted" onClick={()=>void runOw('llvm')} title="Emit LLVM IR to build/owler (experimental)"><Code2 size={15}/> LLVM IR</button><button className="toolbar-action muted" onClick={()=>void runWebApp()} title="Run web app (serve + open preview)"><Globe size={15}/> Run web</button><div className="dropdown"><button className="toolbar-action muted" onClick={()=>void runOw('package','web')} title="Package complete OW/Night web app"><Package size={15}/> Web app</button></div><button className="run-button" onClick={()=>void runOw('run')}><Play size={14} fill="currentColor"/> Run OW <kbd>F5</kbd></button></div>
@@ -563,9 +688,9 @@ export default function App(){
     {([['files',Files,'Explorer'],['search',Search,'Search'],['git',GitBranch,'Source control'],['tools',Layers,'Tools & extensions']] as const).map(([key,Icon,label])=><button key={key} className={section===key&&sidebarVisible?'active':''} title={label} onClick={()=>{setSection(key);setSidebarVisible(true)}}><Icon size={20}/>{key==='git'&&git.changes.length>0&&<span className="rail-dot"/>}</button>)}
    </div><div className="rail-bottom"><button title="GitHub Organization" onClick={()=>void openUrl(org)}><Cloud size={20}/></button><button title="Settings" onClick={()=>setShowSettings(true)}><Settings2 size={20}/></button></div></div>
    {sidebarVisible&&<aside className="sidebar" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
-    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void reloadProject()} title="Reload project (refresh open files and explorer)"><RefreshCw size={14}/></button></div></div>
+    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER {workspace&&<span className={'explorer-sync '+syncStatus} title={syncStatus==='live'?'Automatically synchronized with disk':syncStatus==='error'?'Disk synchronization failed; retrying':'Starting disk synchronization'}>{syncStatus==='live'?'● LIVE':syncStatus==='error'?'● RETRY':'● SYNC'}</span>}</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void reloadProject()} title="Reload project (refresh open files and explorer)"><RefreshCw size={14}/></button></div></div>
      {workspace&&roots.length<=1&&<button className="workspace-fold" onClick={()=>void pickOpen()}><ChevronDown size={15}/><b>{basename.toUpperCase()}</b><MoreHorizontal size={14}/></button>}
-     <div className="explorer-tree" onContextMenu={e=>{if(!workspace)return;e.preventDefault();setCtxMenu({x:e.clientX,y:e.clientY,node:{name:basename,path:'',directory:true,children:[]}})}} onDragOver={e=>{if(dragPath){e.preventDefault();e.dataTransfer.dropEffect='move'}}} onDrop={e=>{e.preventDefault();const src=dragPath;setDragPath('');setDropTarget('');if(src&&dirname(src))void moveEntry(src,'')}}>{workspace?tree.map(node=><TreeItem key={node.path} node={node}/>):<div className="sidebar-start"><FolderOpen size={28}/><p>No project opened</p><button onClick={()=>void pickOpen()}>Open folder</button><button className="secondary" onClick={()=>setShowNewProject(true)}>New OW project</button></div>}</div>
+     <div className="explorer-tree" onContextMenu={e=>{if(!workspace)return;e.preventDefault();setCtxMenu({x:e.clientX,y:e.clientY,node:{name:basename,path:'',directory:true,children:[]}})}} onDragOver={e=>{if(dragPath){e.preventDefault();e.dataTransfer.dropEffect='move'}}} onDrop={e=>{e.preventDefault();const src=dragPath;setDragPath('');setDropTarget('');if(src&&dirname(src))void moveEntry(src,'')}}>{workspace?tree.map(node=>renderTreeItem(node)):<div className="sidebar-start"><FolderOpen size={28}/><p>No project opened</p><button onClick={()=>void pickOpen()}>Open folder</button><button className="secondary" onClick={()=>setShowNewProject(true)}>New OW project</button></div>}</div>
      <div className="sidebar-section-heading"><ChevronDown size={13}/> OUTLINE</div><div className="outline-hint">{active?'Symbols in the active editor':'Open a file to see its symbols'}</div>
      {active&&<div className="outline-list">{tabs.find(t=>t.path===active)?.content.split('\n').filter(l=>/^\s*(fn |class |model |module |functor |interface |main:|route )/.test(l)).slice(0,30).map((s,i)=><div key={i}><Braces size={12}/>{s.trim().slice(0,48)}</div>)}</div>}
     </>}
@@ -586,12 +711,12 @@ export default function App(){
      </>}<div className="git-publish"><button onClick={()=>{setPublishName(basename.toLowerCase().replace(/[^a-z0-9-_]/g,'-'));setShowPublish(true)}}><UploadCloud size={15}/> Publish new repo to GitHub</button></div>{gitOutput&&<div className="git-output" title={gitOutput}>{gitOutput.slice(0,800)}</div>}
     </>}
     {section==='search'&&<><div className="sidebar-heading"><span>SEARCH</span></div><div className="search-area"><div className="search-field"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void doSearch()}} placeholder="Search across workspace"/></div><button onClick={()=>void doSearch()} disabled={!search||searchBusy}>{searchBusy?<Loader2 size={15} className="spin"/>:<Search size={15}/>} Find in files</button><small>Searches up to 180 text files, 250 matches.</small></div><div className="sidebar-section-heading">RESULTS <span className="pill-counter">{searchResults.length}</span></div><div className="search-results">{searchResults.map((r,i)=><button key={i} onClick={()=>{void openFile(r.path).then(()=>setJump({path:r.path,line:r.line,column:1,nonce:Date.now()}))}}><b>{fileName(r.path)} <small>:{r.line}</small></b><span>{r.text}</span><small>{r.path}</small></button>)}</div></>}
-    {section==='tools'&&<><div className="sidebar-heading"><span>DEVELOPMENT TOOLS</span></div><div className="tool-side-head">OW INTEGRATION</div><div className="tool-status"><span className={`status-dot ${toolchain.available?'good':''}`}/><div><b>{toolchain.available?'OW toolchain detected':'Toolchain not found'}</b><small>{toolchain.source}<br/>{toolchain.version||'Start via Tauri to detect the OW runtime'}</small></div></div><div className="side-menu">
+    {section==='tools'&&<><div className="sidebar-heading"><span>DEVELOPMENT TOOLS</span></div><div className="tool-side-head">OW INTEGRATION</div><div className="tool-status"><span className={`status-dot ${toolchain.available?'good':''}`}/><div><b>{toolchain.available?'OW toolchain detected':toolchain.source==='Checking...'?'Checking toolchain…':'Toolchain not found'}</b><small>{toolchain.source}<br/>{toolchain.version||'Start via Tauri to detect the OW runtime'}{toolchain.revision&&<><br/>Compiler commit: <code title={toolchain.revision}>{toolchain.revision.slice(0,12)}</code></>}</small></div></div><div className="side-menu">
       <button onClick={()=>void runOw('check')}><Check size={16}/> Check OW syntax</button><button onClick={()=>void runOw('run')}><Play size={16}/> Run OW application</button><button onClick={()=>void runOwTests('tests')} disabled={!workspace||testBusy}><FlaskConical size={16}/> Run all OWUnit tests</button><button onClick={()=>void createOwUnitTest()} disabled={!workspace}><FilePlus size={16}/> New OWUnit test</button><button onClick={()=>void runWebApp()}><Globe size={16}/> Run web app (serve + preview)</button><button onClick={()=>void runOw('build')}><Package size={16}/> Build native executable</button><button onClick={()=>void runOw('llvm')}><Code2 size={16}/> Emit LLVM IR (.ll)</button><button onClick={()=>void runOw('package','web')}><Globe size={16}/> Package web service</button><button onClick={()=>void runOw('package','gui')}><Box size={16}/> Package GUI app</button><button onClick={()=>void runOw('package','console')}><TerminalSquare size={16}/> Package console app</button><button onClick={()=>{setPanelMode('preview');setTerminalVisible(true)}}><Globe size={16}/> Web preview (localhost)</button>
-     </div><div className="tool-side-head">AI CODING AGENTS</div><div className="side-menu"><button onClick={()=>void startSession('claude')}><Zap size={16}/> Claude Code CLI</button><button onClick={()=>void startSession('codex')}><WandSparkles size={16}/> OpenAI Codex CLI</button><button onClick={()=>void startSession('shell')}><SquareTerminal size={16}/> System terminal</button><button onClick={()=>void startSession('powershell')}><TerminalSquare size={16}/> PowerShell</button><button onClick={()=>void startSession('gemini')}><Zap size={16}/> Gemini CLI</button><button onClick={()=>void startSession('aider')}><Code2 size={16}/> Aider</button><button onClick={()=>void startSession('opencode')}><WandSparkles size={16}/> OpenCode</button></div><div className="tool-side-head">DETECTED DEVELOPMENT TOOLS <button onClick={()=>void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(e=>toast(String(e),true))}><RefreshCw size={12}/></button></div><div className="owler-cli-status">{environment.map(item=><div key={item.name}><span className={`status-dot ${item.available?'good':''}`}/><b>{item.name}</b><small>{item.available?'Available':'Not installed'}</small></div>)}</div><div className="tool-side-head">SOFTWARE UPDATES</div><div className="side-menu"><button onClick={()=>void checkForUpdates()}><Download size={16}/> Check for updates</button></div><div className="tool-side-head">FRAMEWORKS & DOCS</div><div className="side-menu"><button onClick={()=>void openUrl('https://github.com/OW-Programing-Language/ow-lang')}><Code2 size={16}/> OW language <ExternalLink size={12}/></button><button onClick={()=>void openUrl(night)}><Globe size={16}/> Night web framework <ExternalLink size={12}/></button><button onClick={()=>void openUrl(`${org}/flOW---OW-Modular-Framework`)}><Layers size={16}/> flOW Modulith <ExternalLink size={12}/></button></div><div className="tool-note">{toolchain.build_note||'The bundled OW compiler will be staged during installer builds.'}</div></>}
+     </div><div className="tool-side-head">JVM RUNTIME EXTENSIONS</div><div className="side-menu"><button disabled={!workspace} onClick={()=>void selectRuntimeJars()}><Layers size={16}/> Select trusted JARs</button><button disabled={!workspace||!runtimeJars.length} onClick={()=>void clearRuntimeJars()}><X size={16}/> Clear extensions</button></div><div className="tool-note">Session only · primary workspace · used by Run, Check, Test and web preview. {runtimeJars.length?runtimeJars.map(path=><div key={path} title={path}>{path.split(/[\\/]/).pop()}</div>):"No runtime extensions selected."}</div><div className="tool-side-head">AI CODING AGENTS</div><div className="side-menu"><button onClick={()=>void startSession('claude')}><Zap size={16}/> Claude Code CLI</button><button onClick={()=>void startSession('codex')}><WandSparkles size={16}/> OpenAI Codex CLI</button><button onClick={()=>void startSession('shell')}><SquareTerminal size={16}/> System terminal</button><button onClick={()=>void startSession('powershell')}><TerminalSquare size={16}/> PowerShell</button><button onClick={()=>void startSession('gemini')}><Zap size={16}/> Gemini CLI</button><button onClick={()=>void startSession('aider')}><Code2 size={16}/> Aider</button><button onClick={()=>void startSession('opencode')}><WandSparkles size={16}/> OpenCode</button></div><div className="tool-side-head">DETECTED DEVELOPMENT TOOLS <button onClick={()=>void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(e=>toast(String(e),true))}><RefreshCw size={12}/></button></div><div className="owler-cli-status">{[...environment,{name:'ow compiler',available:toolchain.available}].map(item=><div key={item.name}><span className={`status-dot ${item.available?'good':''}`}/><b>{item.name}</b><small>{item.available?'Available':'Not installed'}</small></div>)}</div><div className="tool-side-head">SOFTWARE UPDATES</div><div className="side-menu"><button onClick={()=>void checkForUpdates()}><Download size={16}/> Check for updates</button></div><div className="tool-side-head">FRAMEWORKS & DOCS</div><div className="side-menu"><button onClick={()=>void openUrl('https://github.com/OW-Programing-Language/ow-lang')}><Code2 size={16}/> OW language <ExternalLink size={12}/></button><button onClick={()=>void openUrl(night)}><Globe size={16}/> Night web framework <ExternalLink size={12}/></button><button onClick={()=>void openUrl(`${org}/flOW---OW-Modular-Framework`)}><Layers size={16}/> flOW Modulith <ExternalLink size={12}/></button></div><div className="tool-note">{toolchain.build_note||'The bundled OW compiler will be staged during installer builds.'}</div></>}
    </aside>}
    {sidebarVisible&&<div className="v-resizer" title="Drag to resize · double-click to reset" onMouseDown={startSidebarDrag} onDoubleClick={()=>{setSidebarWidth(255);localStorage.setItem('owler:sidebar-width','255')}}/>}
-   <main className="work-area"><div className="editor-surface" style={{flex:maxTerminal?'0 0 0':'1 1 auto',minHeight:maxTerminal?0:120,overflow:'hidden'}}><EditorPane tabs={tabs} active={active} onActivate={setActive} onClose={closeFile} onChange={changeFile} onSave={()=>void saveAll()} onRun={()=>void runOw('run')} onRunTest={(path,filter)=>void runOwTests(path,filter)} diagnostics={problems} jump={jump} settings={settings}/></div>
+   <main className="work-area"><div className="editor-surface" style={{flex:maxTerminal?'0 0 0':'1 1 auto',minHeight:maxTerminal?0:120,overflow:'hidden'}}><EditorPane tabs={tabs} active={active} onActivate={setActive} onClose={closeFile} onChange={changeFile} onReloadDisk={reloadDiskFile} onSave={()=>void saveAll()} onRun={()=>void runOw('run')} onRunTest={(path,filter)=>void runOwTests(path,filter)} diagnostics={problems} jump={jump} settings={settings}/></div>
     {terminalVisible&&!maxTerminal&&<div className="h-resizer" title="Drag to resize · double-click to reset" onMouseDown={startPanelDrag} onDoubleClick={()=>{setPanelHeight(268);localStorage.setItem('owler:panel-height','268')}}/>}
     {terminalVisible&&<div className={`bottom-panel ${maxTerminal?'maximized':''}`} style={maxTerminal?undefined:{height:panelHeight,minHeight:120}}>
      <div className="owler-panel-tabs"><button className={panelMode==='terminal'?'selected':''} onClick={()=>setPanelMode('terminal')}><TerminalSquare size={13}/> Terminal</button><button className={panelMode==='problems'?'selected':''} onClick={()=>setPanelMode('problems')}><ShieldCheck size={13}/> Problems <span>{problems.length}</span></button><button className={panelMode==='tests'?'selected':''} onClick={()=>setPanelMode('tests')}><FlaskConical size={13}/> Tests <span>{testReport?testReport.results.length:0}</span></button><button className={panelMode==='preview'?'selected':''} onClick={()=>setPanelMode('preview')}><Globe size={13}/> Web preview</button><span className="owler-panel-spacer"/><button onClick={()=>setTerminalVisible(false)} title="Close panel"><X size={14}/></button></div>
@@ -603,9 +728,9 @@ export default function App(){
    </main>
    <div className="right-rail"><button title="New project" onClick={()=>setShowNewProject(true)}><Plus size={19}/></button><button title="GitHub repository" onClick={()=>void openUrl(org)}><GitPullRequest size={19}/></button><span className="right-rail-spacer"/><button title="OW docs" onClick={()=>void openUrl(`${org}/owdocs`)}><BookOpen size={19}/></button></div>
   </div>
-  <div className="statusbar"><div className="status-left"><button onClick={()=>{setSection('git');setSidebarVisible(true)}}><GitBranch size={13}/>{git.branch||'No Git'}</button><span className="status-counter">{git.changes.length?`${git.changes.length} modified`:'✓'}</span><button onClick={()=>{setSection('tools');setSidebarVisible(true)}}><ShieldCheck size={13}/>{toolchain.available?'Toolchain ready':'Setup OW'}</button></div><div className="status-right"><span>{active?'UTF-8':'Owler IDE'}</span><span>Spaces: 2</span><span className="status-language"><span className="small-ow">ow</span> {active?active.split('.').pop()?.toUpperCase():'OW'}</span><button className="status-live" title="Check for updates" onClick={()=>void checkForUpdates()}><Activity size={12}/> v0.1.4</button></div></div>
+  <div className="statusbar"><div className="status-left"><button onClick={()=>{setSection('git');setSidebarVisible(true)}}><GitBranch size={13}/>{git.branch||'No Git'}</button><span className="status-counter">{git.changes.length?`${git.changes.length} modified`:'✓'}</span><button onClick={()=>{setSection('tools');setSidebarVisible(true)}}><ShieldCheck size={13}/>{toolchain.available?'Toolchain ready':'Setup OW'}</button></div><div className="status-right"><span>{active?'UTF-8':'Owler IDE'}</span><span>Spaces: 2</span><span className="status-language"><span className="small-ow">ow</span> {active?active.split('.').pop()?.toUpperCase():'OW'}</span><button className="status-live" title="Check for updates" onClick={()=>void checkForUpdates()}><Activity size={12}/> v0.2.0</button></div></div>
   {palette&&<div className="overlay" onMouseDown={()=>setPalette(false)}><div className="palette" onMouseDown={e=>e.stopPropagation()}><div className="palette-search"><Command size={20}/><input autoFocus value={paletteQuery} onChange={e=>setPaletteQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&visiblePalette.length){visiblePalette[0].run();setPalette(false)}else if(e.key==='Escape')setPalette(false)}} placeholder="Search files and commands…"/><kbd>ESC</kbd></div><div className="palette-body"><p>COMMANDS & FILES</p>{visiblePalette.map((item,i)=><button key={i} onClick={()=>{item.run();setPalette(false)}}><span>{item.name}</span><small>{item.hint}</small></button>)}</div><div className="palette-footer">↵ to select <span>·</span> ESC to close <span>·</span> OWLER COMMANDS</div></div></div>}
-  {showNewProject&&<div className="overlay" onMouseDown={()=>setShowNewProject(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Box size={21}/></span><button onClick={()=>setShowNewProject(false)}><X size={19}/></button></div><h2>Create a new OW project</h2><p>Creates src/main.ow, dependencies.yml with OW Math Questions + OWUnit, and tests/ExampleTest.ow with a runnable @Test. Git is initialized when available.</p><label>PROJECT NAME</label><input className="dialog-input" value={newProject.name} onChange={e=>setNewProject(p=>({...p,name:e.target.value}))} placeholder="my-awesome-app"/><label>PROJECT TEMPLATE</label><div className="template-list">{([['console','Console application','A clean OW entry point with a typed function.',TerminalSquare],['web','Night web app','A REST API, JSON routes and persistent model.',Globe],['ui','OW interactive UI','Build a clickable OW user interface.',Layers]] as const).map(([key,title,description,I])=><button key={key} className={newProject.kind===key?'selected':''} onClick={()=>setNewProject(v=>({...v,kind:key}))}><span className="template-icon"><I size={20}/></span><span><b>{title}</b><small>{description}</small></span><span className="radio-dot"/></button>)}</div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowNewProject(false)}>Cancel</button><button className="primary" onClick={()=>void createProject()}><Plus size={17}/> Create project</button></div></div></div>}
+  {showNewProject&&<div className="overlay" onMouseDown={()=>setShowNewProject(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Box size={21}/></span><button onClick={()=>setShowNewProject(false)}><X size={19}/></button></div><h2>Create a new OW project</h2><p>Creates src/main.ow, dependencies.yml with OW Math Questions + OWUnit, and tests/ExampleTest.ow with a runnable @Test. Git is initialized when available.</p><label>PROJECT NAME</label><input className="dialog-input" value={newProject.name} onChange={e=>setNewProject(p=>({...p,name:e.target.value}))} placeholder="my-awesome-app"/><label>PROJECT TEMPLATE</label><div className="template-list">{([['console','Console application','A clean OW entry point with a typed function.',TerminalSquare],['web','Night web app','A REST API, JSON routes and persistent model.',Globe],['ui','OW interactive UI','Build a clickable OW user interface.',Layers],['night','Night annotated API','Controller, service and typed injection.',Globe],['flow','flOW modular application','Typed contracts and module lifecycle.',Layers],['owcord','OWCord Discord bot','Slash command starter with runtime JAR setup.',Box]] as const).map(([key,title,description,I])=><button key={key} className={newProject.kind===key?'selected':''} onClick={()=>setNewProject(v=>({...v,kind:key}))}><span className="template-icon"><I size={20}/></span><span><b>{title}</b><small>{description}</small></span><span className="radio-dot"/></button>)}</div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowNewProject(false)}>Cancel</button><button className="primary" onClick={()=>void createProject()}><Plus size={17}/> Create project</button></div></div></div>}
   {showPublish&&<div className="overlay" onMouseDown={()=>setShowPublish(false)}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Cloud size={21}/></span><button onClick={()=>setShowPublish(false)}><X size={19}/></button></div><h2>Publish to OW GitHub</h2><p>Create a new repository under <b>OW-Programing-Language</b> and push your commits using the GitHub CLI (<code>gh auth login</code>). No token is stored in Owler.</p><label>REPOSITORY NAME</label><input className="dialog-input" value={publishName} onChange={e=>setPublishName(e.target.value)} placeholder="my-ow-app"/><label>DESCRIPTION</label><input className="dialog-input" value={publishDescription} onChange={e=>setPublishDescription(e.target.value)}/><label>VISIBILITY</label><div className="publish-visibility"><button className={publishVisibility==='public'?'selected':''} onClick={()=>setPublishVisibility('public')}>Public</button><button className={publishVisibility==='private'?'selected':''} onClick={()=>setPublishVisibility('private')}>Private</button></div><div className="dialog-actions"><button className="cancel" onClick={()=>setShowPublish(false)}>Cancel</button><button className="primary" disabled={!publishName} onClick={()=>void publishToGitHub()}><UploadCloud size={17}/> Create and push</button></div></div></div>}
   {diffPreview&&<div className="overlay" onMouseDown={()=>setDiffPreview(null)}><div className="owler-diff-dialog" onMouseDown={e=>e.stopPropagation()}><div className="owler-diff-header"><FileCode2 size={17}/><b>Git diff · {diffPreview.path}</b><button onClick={()=>setDiffPreview(null)}><X size={16}/></button></div><pre>{diffPreview.content}</pre></div></div>}
   {showCreatePr&&<div className="overlay" onMouseDown={()=>setShowCreatePr(false)}><div className="dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><GitPullRequest size={19}/></span><button onClick={()=>setShowCreatePr(false)}><X size={18}/></button></div><h2>Create GitHub pull request</h2><p>Push your branch first. Owler uses your signed-in GitHub CLI.</p><label>TITLE</label><input className="dialog-input" value={prTitle} onChange={e=>setPrTitle(e.target.value)} placeholder="feat: implement OW feature"/><label>BASE BRANCH</label><input className="dialog-input" value={prBase} onChange={e=>setPrBase(e.target.value)}/><label>DESCRIPTION</label><textarea className="dialog-input" rows={5} value={prBody} onChange={e=>setPrBody(e.target.value)}/><div className="dialog-actions"><button className="cancel" onClick={()=>setShowCreatePr(false)}>Cancel</button><button className="primary" disabled={!prTitle.trim()} onClick={()=>void createPullRequest()}><GitPullRequest size={16}/> Create PR</button></div></div></div>}
@@ -619,8 +744,8 @@ export default function App(){
   {showUpdate&&<div className="overlay" onMouseDown={()=>{if(updateState!=='downloading')setShowUpdate(false)}}><div className="dialog clone-dialog" onMouseDown={e=>e.stopPropagation()}><div className="dialog-top"><span className="dialog-icon"><Download size={21}/></span>{updateState!=='downloading'&&<button onClick={()=>setShowUpdate(false)}><X size={19}/></button>}</div>
    <h2>Software update</h2>
    {updateState==='checking'&&<p><Loader2 size={14} className="spin"/> Checking for a newer version of Owler IDE…</p>}
-   {updateState==='current'&&<p>You're up to date — Owler IDE <b>v0.1.4</b> is the latest version.</p>}
-   {updateState==='available'&&updateInfo&&<><p>A new version <b>v{updateInfo.version}</b> is available (you have v0.1.4). Installing replaces your current version automatically and restarts the IDE.</p>{updateInfo.notes&&<pre className="update-notes">{updateInfo.notes.slice(0,1200)}</pre>}</>}
+   {updateState==='current'&&<p>You're up to date — Owler IDE <b>v0.2.0</b> is the latest version.</p>}
+   {updateState==='available'&&updateInfo&&<><p>A new version <b>v{updateInfo.version}</b> is available (you have v0.2.0). Installing replaces your current version automatically and restarts the IDE.</p>{updateInfo.notes&&<pre className="update-notes">{updateInfo.notes.slice(0,1200)}</pre>}</>}
    {updateState==='downloading'&&<><p>Downloading and installing v{updateInfo?.version}… Owler will restart when it finishes.</p><div className="update-bar"><div style={{width:`${updateProgress}%`}}/></div><div className="update-pct">{updateProgress}%</div></>}
    {updateState==='error'&&<p className="collab-error">Update failed: {updateError}</p>}
    <div className="dialog-actions">{updateState!=='downloading'&&<button className="cancel" onClick={()=>setShowUpdate(false)}>Close</button>}{updateState==='available'&&<button className="primary" onClick={()=>void installUpdate()}><Download size={16}/> Install and restart</button>}{updateState==='error'&&<button className="primary" onClick={()=>void checkForUpdates()}><RefreshCw size={15}/> Retry</button>}</div></div></div>}

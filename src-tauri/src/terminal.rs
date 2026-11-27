@@ -153,7 +153,9 @@ pub fn start_ow(app:&AppHandle,state:&State<'_,AppState>,action:&str,entry:&str,
  let (root,rel)=workspace::resolve(state,entry)?;
  let _ = workspace::existing_ow(&root,&rel)?;
  let entry=rel.as_str();
- let (prog,mut args)=crate::ow::toolchain(app)?;
+ let has_extensions=!crate::ow::project_extensions(state,&root)?.is_empty();
+ if has_extensions && action=="package"{return Err("Runtime JAR packaging is not supported by OW package; distribute the runtime and extensions separately".into())}
+ let (prog,mut args)=if action=="run"||action=="check"{crate::ow::project_toolchain(app,state,&root)?}else{crate::ow::toolchain(app)?};
  match action {
   "check"|"run"|"build"=>{args.push(action.into());args.push(entry.into());},
   "llvm"=>{
@@ -310,10 +312,10 @@ pub fn ow_serve(entry:Option<String>,app:AppHandle,state:State<'_,AppState>)->Re
  // web-capable runtime: OW_JAR, or the project's packaged OW-lang runtime jar.
  let web_jar=std::env::var("OW_JAR").ok().map(std::path::PathBuf::from).filter(|p|p.is_file())
   .or_else(||{let p=root.join(".packaging").join("ow-lang").join("target").join("OwIDE.jar");if p.is_file(){Some(p)}else{None}});
- let (prog,mut args)=match web_jar{
+ let (prog,mut args)=if !crate::ow::project_extensions(&state,&root)?.is_empty(){crate::ow::project_toolchain(&app,&state,&root)?}else{match web_jar{
   Some(jar)=>{let java=crate::ow::bundled_java(&app).unwrap_or_else(||"java".into());(java,vec!["-jar".into(),crate::ow::plain(&jar)])},
   None=>crate::ow::toolchain(&app)?,
- };
+ }};
  args.push("run".into());args.push(run_entry);
  let session_id=create_session_in(&app,&state,prog,args,Some(cwd))?;
  Ok(WebRun{session_id,port,url:format!("http://127.0.0.1:{port}/")})

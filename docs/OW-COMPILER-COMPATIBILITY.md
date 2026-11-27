@@ -43,7 +43,11 @@ fn greet(name: string):
 | UTF-8 string literals, comparison, `len` | Yes | Yes |
 | Native `string + string` and memory cleanup | Yes | Yes |
 | Mixed string/number concatenation | Yes | Not yet supported |
-| String arrays, dictionaries, class/object features | Yes | Not yet fully supported |
+| String arrays (`string_array`) | Yes | Yes, typed reference-counted native arrays |
+| `int_map`, `string_map`, `mixed_map`, nested dictionaries | Yes | Experimental native hash maps, no cycles/array or object values |
+| `map_keys`, `map_values`, `mixed_array` | Yes | Ordered snapshots; mixed arrays are read-only |
+| Class/object features | Yes | Not yet fully supported |
+| Component annotations, generated repositories, transactions, module discovery | Yes (repositories and transactions need Night JDBC) | No |
 | Static module calculus and supported functors | Yes | Partial native lowering |
 | Night web routes / GUI runtime | Yes | Packaged runtime, not native LLVM |
 
@@ -73,3 +77,7 @@ ow test tests/
 
 The bundled Java toolchain is still needed **at compile time**, but a
 successfully compiled native program does not need the JVM **at runtime**.
+
+## Runtime extensions and framework projects
+
+The actual bundled source commit is displayed in Tools, read from build-time toolchain.json (including a developer OW_SOURCE_DIR override). Select trusted JARs in Tools > JVM Runtime Extensions. Selected files apply to the primary workspace and persist in memory for the IDE session only. Run, Check, Test and web preview launch the bundled JVM with `-cp` and `dev.oreo.Main`. No project-controlled automatic extension discovery, no automatic JAR downloads, no automatic packaging of JVM extensions. Select the corresponding Night platform or OWCord bridge JAR after building it from the pinned framework repository. The OWCord template requires Discord credentials in the inherited environment. The Night starter runs an annotated GET endpoint without a database; the repository example requires Night JDBC setup. flOW starter demonstrates typed service lifecycle. Completion is heuristic over open editor models, not a language server; repository suggestions only appear for recognizable typed receivers.

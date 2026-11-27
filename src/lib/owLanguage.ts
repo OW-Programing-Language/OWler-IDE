@@ -5,9 +5,56 @@ export const OW_KEYWORDS = [
   'functor_type','type','include','import','set','return','print','call','if',
   'else','while','for','switch','case','default','break','continue','returns','route',
   'respond','serve','save','find','delete','with_type','new','this','private',
-  'public','true','false','null','and','or','not','assert','try','catch','finally','throw'
+  'public','field','where','true','false','null','and','or','not','assert','try','catch','finally','throw'
 ];
+export const OW_ANNOTATIONS = {
+ Test:'OWUnit test function or method.',
+ BeforeEach:'OWUnit setup hook.',
+ AfterEach:'OWUnit teardown hook.',
+ Service:'Interpreter-only singleton service class.',
+ Controller:'Interpreter-only singleton HTTP controller class.',
+ Repository:'Experimental generated repository: @Repository("table", "id_column"). Requires Night JDBC for CRUD; class must be empty.',
+ Inject:'Typed field injection of a concrete annotated singleton after construction.',
+ Transactional:'Interpreter-only REQUIRED transaction through the Night JDBC runtime extension.',
+ GetMapping:'Public zero-argument controller method mapped to a static GET path.',
+ PostMapping:'Public zero-argument controller method mapped to a static POST path.'
+} as const;
+export const OW_REPOSITORY_METHODS = [
+ ['save','save(${1:record})','INSERT only; duplicate keys fail.'],
+ ['updateById','updateById(${1:id}, ${2:fields})','Update explicit non-ID fields; returns affected rows.'],
+ ['findById','findById(${1:id})','Returns record or 0 if missing.'],
+ ['existsById','existsById(${1:id})','Returns 1 or 0.'],
+ ['deleteById','deleteById(${1:id})','Returns affected rows.'],
+ ['findAll','findAll()','At most 500 records ordered by ID.'],
+ ['page','page(${1:"name"}, ${2:20}, ${3:0})','Bounded page; prefix column with - for descending order.']
+] as const;
+export function isRepositoryReceiver(lineBeforeCursor:string,source:string):boolean{
+ const receiver=lineBeforeCursor.match(/(?:this\.)?([A-Za-z_]\w*)\.[A-Za-z_]*$/)?.[1];
+ if(!receiver)return false;
+ const repositories=new Set(Array.from(source.matchAll(/^\s*@Repository\s*\([^\n]*\)\s*\n\s*class\s+([A-Za-z_]\w*)/gm),m=>m[1]));
+ const typed=Array.from(source.matchAll(new RegExp('^\\s*(?:field\\s+(?:private\\s+)?|set\\s+)'+receiver+'\\s+([A-Za-z_]\\w*)','gm')),m=>m[1]);
+ const direct=Array.from(source.matchAll(new RegExp('^\\s*set\\s+'+receiver+'\\s*:\\s*component_get\\("([A-Za-z_]\\w*)"\\)','gm')),m=>m[1]);
+ return [...typed,...direct].some(t=>repositories.has(t));
+}
 const descriptions:Record<string,string>={
+ ...OW_ANNOTATIONS,
+ module_scan:'Discover loaded publicly reachable modules by structural signature. Interpreter only.',
+ component_scan:'Discover annotated singleton components by stereotype, or All.',
+ component_get:'Retrieve a concrete annotated singleton by class name.',
+ component_mount:'Mount explicit or annotated controller routes; interpreter only.',
+ extension:'Invoke a trusted installed JVM RuntimeExtension by operation name.',
+ map_get:'Read a map key with a lazy fallback.',
+ map_set:'Insert or replace a map key.',
+ map_delete:'Remove a map key.',
+ map_has:'Check whether a map key exists.',
+ map_size:'Count map entries.',
+ map_keys:'Insertion-order snapshot of dictionary keys.',
+ map_values:'Insertion-order snapshot of dictionary values.',
+ load:'Load a JSON value from disk.',
+ exists:'Check whether a file exists.',
+ now_ms:'Monotonic milliseconds since interpreter start.',
+ sleep:'Block for the specified milliseconds.',
+
  main:'OW application entry point; executed by `ow run`.',
  fn:'Declare a function using OW YAML-style parameters: fn greet(name: string): followed by returns: string. Legacy -> syntax remains valid.',
  returns:'Declare a function or method return type as YAML metadata (first line of body). Use return: to return a value.',
@@ -41,15 +88,26 @@ function symbolsInDocument(text:string){
  }
  return out;
 }
-const OW_TYPES=[
+export const OW_TYPES=[
  {name:'int',detail:'32-bit integer (native LLVM + interpreter)'},
  {name:'string',detail:'UTF-8 string (native: string + string, len(), ==, !=; interpreter supports more)'},
  {name:'bool',detail:'Boolean value (native LLVM + interpreter)'},
  {name:'array',detail:'Integer array (native LLVM subset; broader in interpreter)'},
+ {name:'string_array',detail:'Native reference-counted string array'},
+ {name:'int_map',detail:'Native string-keyed integer dictionary'},
+ {name:'string_map',detail:'Native string-keyed string dictionary'},
+ {name:'mixed_map',detail:'Native string-keyed tagged integer/string/nested-map dictionary'},
+ {name:'mixed',detail:'Native tagged integer/string/nested-map value'},
+ {name:'mixed_array',detail:'Native ordered snapshot of mixed map values (read-only indexed access)'},
  {name:'float',detail:'Floating point (interpreter; not yet native LLVM)'}
 ] as const;
-const builtins=['len','str','int','float','bool','array','mod','rand','time_ms','input','json','json_parse','body','body_json','param','query','response','ui_run','ui_run_web','ui_run_native','ui_heading','ui_text','ui_button','ui_image','ui_col','ui_row','ui_card','ui_grid','ui_bar','ui_space','ui_stop'];
+const builtins=['module_scan','component_scan','component_get','component_mount','extension','map_get','map_set','map_delete','map_has','map_size','map_keys','map_values','load','exists','sleep','now_ms','len','str','int','float','bool','array','mod','rand','time_ms','input','json','json_parse','body','body_json','param','query','response','ui_run','ui_run_web','ui_run_native','ui_heading','ui_text','ui_button','ui_image','ui_col','ui_row','ui_card','ui_grid','ui_bar','ui_space','ui_stop'];
 const snippets:[string,string,string][]=[
+ ['Annotated service','@Service\nclass ${1:ExampleService}:\n  fn message():\n    returns: string\n    return: "${2:Hello}"','Service'],
+ ['Annotated controller','@Controller\nclass ${1:ExampleController}:\n  @Inject\n  field private service ${2:ExampleService}\n\n  @GetMapping("/api/example")\n  fn get():\n    returns: string\n    return: this.service.message()','Controller'],
+ ['Generated repository','@Repository("${1:app_users}", "${2:id}")\nclass ${3:UserRepository}:','Repository'],
+ ['Transactional method','@Transactional\nfn ${1:save}():\n  returns: int\n  return: ${2:1}','Transactional'],
+ ['Native dictionary','set ${1:config}: {host: "localhost", port: 8080}','map'],
  ['YAML typed function','fn ${1:name}(${2:arg}: ${3:int}):\n  returns: ${4:int}\n  return: ${5:0}','fn'],
  ['Return type declaration','returns: ${1:int}','returns'],
  ['Native array function','fn ${1:create}(size: int):\n  returns: array\n  return: array(size, ${2:0})','array'],
@@ -83,8 +141,9 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
   tokenizer:{root:[
    [/^\s*#[^\n]*/,'comment'],
    [/^\s*@(Test|BeforeEach|AfterEach)\b/,'owunit.annotation'],
+   [/^\s*@(Service|Controller|Repository|Inject|Transactional|GetMapping|PostMapping)\b/,'ow.annotation'],
    [/\b(?:GET|POST|PUT|PATCH|DELETE|OPTIONS)\b/,'type.identifier'],
-   [/\b(?:int|string|bool|array|float)\b/,'type.identifier'],
+   [/\b(?:int|string|bool|array|float|string_array|int_map|string_map|mixed_map|mixed_array|mixed)\b/,'type.identifier'],
    [/[a-zA-Z_][\w]*/,{cases:{'@keywords':'keyword','@builtins':'predefined','@default':'identifier'}}],
    [/\b\d+(?:\.\d+)?\b/,'number'],
    [/"([^"\\]|\\.)*"/,'string'],
@@ -99,6 +158,7 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
   rules:[
    {token:'keyword',foreground:'c5a0fa',fontStyle:'bold'},
    {token:'owunit.annotation',foreground:'80dbae',fontStyle:'bold'},
+   {token:'ow.annotation',foreground:'f5cc7e',fontStyle:'bold'},
    {token:'predefined',foreground:'82dacc'},
    {token:'string',foreground:'e2b683'},
    {token:'number',foreground:'f0a988'},
@@ -124,6 +184,7 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
   }
  });
  editor.languages.registerCompletionItemProvider('ow',{
+  triggerCharacters:['@','.'],
   provideCompletionItems:(model,position)=>{
    const word=model.getWordUntilPosition(position);
    const range={startLineNumber:position.lineNumber,endLineNumber:position.lineNumber,startColumn:word.startColumn,endColumn:word.endColumn};
@@ -131,6 +192,19 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
    const typeSuggestions=OW_TYPES.map(t=>({label:t.name,kind:editor.languages.CompletionItemKind.TypeParameter,
       insertText:t.name,range,detail:t.detail,sortText:'0'+t.name}));
    if(isOwTypePosition(lineBeforeCursor))return {suggestions:typeSuggestions};
+   if(/^\s*@[A-Za-z_]*$/.test(lineBeforeCursor)){
+    return {suggestions:Object.entries(OW_ANNOTATIONS).map(([name,detail])=>({
+     label:'@'+name,kind:editor.languages.CompletionItemKind.Keyword,
+     insertText:name==='Repository'?'Repository("${1:table}", "${2:id}")':
+      name==='GetMapping'||name==='PostMapping'?name+'("${1:/api/path}")':name,
+     insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet,range,detail
+    }))};
+   }
+   const source=editor.editor.getModels().filter(m=>m.getLanguageId()==='ow').map(m=>m.getValue()).join('\n');
+   if(isRepositoryReceiver(lineBeforeCursor,source))return {suggestions:OW_REPOSITORY_METHODS.map(([label,insertText,detail])=>({
+     label,insertText,detail:'Night repository · '+detail,range,kind:editor.languages.CompletionItemKind.Method,
+     insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet
+   }))};
    return {suggestions:[
     ...snippets.map(([label,insertText,trigger])=>({label:`${trigger} · ${label}`,kind:editor.languages.CompletionItemKind.Snippet,insertText,insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet,range,detail:'OW snippet'})),
     ...[...OW_KEYWORDS,...builtins].map(k=>({label:k,kind:editor.languages.CompletionItemKind.Keyword,insertText:k,range,detail:descriptions[k]})),

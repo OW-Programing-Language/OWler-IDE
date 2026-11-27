@@ -1,0 +1,26 @@
+# A working slash-command bot; configure DISCORD_* environment variables.
+import "@flow/src/App.ow"
+import "@owcord/src/gateway/api/GatewayApi.ow"
+import "@owcord/src/gateway/infra/JvmGateway.ow"
+import "@owcord/src/rest/api/RestApi.ow"
+import "@owcord/src/rest/infra/JvmRest.ow"
+
+main:
+  set app: new App()
+  call: app.use_native_as(OWCord.JvmGateway, "DISCORD_GATEWAY")
+  call: app.use_native_as(OWCord.JvmRest, "DISCORD_REST")
+  call: assert(app.boot() == 1, "OWCord boot")
+  set gateway DISCORD_GATEWAY: app.service("gateway")
+  set rest DISCORD_REST: app.service("rest")
+  set status: rest.register_dev_command("ping", "Replies with Pong from OW")
+  if: status != 200
+    call: assert(status == 201, "register command")
+  print: "OWCord is listening for /ping"
+  while: 1 == 1
+    set event: json_parse(gateway.poll(250))
+    if: event.type == "READY"
+      print: "OWCord Gateway READY"
+    else if: event.type == "INTERACTION_CREATE"
+      if: event.data.type == 2
+        if: event.data.data.name == "ping"
+          call: rest.reply(event.data.id, event.data.token, "Pong from OW!")

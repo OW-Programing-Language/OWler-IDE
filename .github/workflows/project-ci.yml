@@ -10,6 +10,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/project-ci.yml'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:

@@ -9,7 +9,8 @@ import {execFileSync} from 'node:child_process';
 import {existsSync,cpSync,mkdirSync,mkdtempSync,rmSync,writeFileSync,copyFileSync,readdirSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-const OW_REF=process.env.OW_REF||'117884cfa873d38fccc312fc3a1f3af5552e1311';
+import {extractToolchainZip} from './extract-toolchain-zip.mjs';
+const OW_REF=process.env.OW_REF||'377b7c18981b9028e7f9dbbda4f6bf6aa8bfed32';
 const sourceUrl='https://github.com/OW-Programing-Language/ow-lang.git';
 const root=resolve(import.meta.dirname,'..');
 const dest=join(root,'vendor','ow');
@@ -30,6 +31,7 @@ try{
  }
  log('Building OW from source with Maven…');
  run(process.platform==='win32'?'mvn.cmd':'mvn',['-B','-q','-DskipTests','clean','package'],owSource);
+ const actualRef=execFileSync('git',['rev-parse','HEAD'],{cwd:owSource,encoding:'utf8'}).trim();
  const jar=join(owSource,'target','OwIDE.jar');
  if(!existsSync(jar))throw new Error(`Expected compiler jar missing: ${jar}`);
  rmSync(dest,{recursive:true,force:true});mkdirSync(dest,{recursive:true});
@@ -49,12 +51,15 @@ try{
   const url='https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip';
   const response=await fetch(url);if(!response.ok)throw new Error(`Zig download HTTP ${response.status}`);
   writeFileSync(zip,Buffer.from(await response.arrayBuffer()));
-  const extracted=join(temporary,'zig-extracted');mkdirSync(extracted);
-  run('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${zip.replaceAll("'","''")}' -DestinationPath '${extracted.replaceAll("'","''")}' -Force`],temporary);
+  const extracted=join(temporary,'zig-extracted');
+  extractToolchainZip(javaHome,zip,extracted);
   const folder=readdirSync(extracted).map(x=>join(extracted,x)).find(x=>existsSync(join(x,'zig.exe')));
   if(!folder)throw new Error('Zig archive does not include zig.exe');
   mkdirSync(join(dest,'tools'),{recursive:true});cpSync(folder,join(dest,'tools','zig'),{recursive:true});
+  const zigVersion=execFileSync(join(dest,'tools','zig','zig.exe'),['version'],{cwd:temporary,encoding:'utf8',shell:false}).trim();
+  if(zigVersion!=='0.14.1')throw new Error(`Unexpected bundled Zig version: ${zigVersion}`);
+  log(`Verified bundled Zig ${zigVersion}`);
  }
- writeFileSync(join(dest,'toolchain.json'),JSON.stringify({ow_ref:OW_REF,includes_jdk:true,includes_zig:existsSync(join(dest,'tools','zig','zig.exe'))},null,2));
- log(`Ready at ${dest}. OW ${OW_REF.slice(0,12)} and JDK from ${javaHome} bundled.`);
+ writeFileSync(join(dest,'toolchain.json'),JSON.stringify({ow_ref:actualRef,includes_jdk:true,includes_zig:existsSync(join(dest,'tools','zig','zig.exe'))},null,2));
+ log(`Ready at ${dest}. OW ${actualRef.slice(0,12)} and JDK from ${javaHome} bundled.`);
 }catch(error){console.error(error);process.exitCode=1;}finally{rmSync(temporary,{recursive:true,force:true});}

@@ -212,3 +212,5 @@
 .owunit-output-toggle{display:flex;align-items:center;gap:7px;padding:9px 14px;color:#a6b6d1;font-size:11px;width:100%;text-align:left;background:#131f30;border-top:1px solid #2d3c50}
 .owunit-output-toggle:hover{background:#203149}
 .owunit-output{background:#09101e;color:#9fb4cf;font:11px/1.7 'JetBrains Mono',monospace;padding:12px 17px;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}
+
+.explorer-sync{font-size:8px;letter-spacing:0;margin-left:4px;color:#8b9bb4}.explorer-sync.live{color:#74cda3}.explorer-sync.error{color:#e6ad68}.disk-conflict-dot{color:#f3be75;font-weight:bold}.disk-conflict-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;background:#3b2e20;color:#f1c98d;font-size:12px;border-bottom:1px solid #765534}.disk-conflict-banner button{flex-shrink:0;border:1px solid #aa8555;padding:4px 8px;border-radius:4px;color:#ffdfab}

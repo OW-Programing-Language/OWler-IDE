@@ -1,0 +1,10 @@
+import "@night/src/NightApp.ow"
+import "GreetingService.ow"
+import "GreetingController.ow"
+
+main:
+  set night: new NightApp()
+  call: assert(night.boot() == 1, "Night boot")
+  call: assert(night.mount_controllers() == 1, "controller mounted")
+  call: night.mount_system()
+  serve: 8080

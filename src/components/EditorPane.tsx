@@ -1,5 +1,6 @@
-import Editor,{type OnMount} from '@monaco-editor/react';
-import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
+import type {OnMount} from '@monaco-editor/react';
+import {lazy,Suspense,useCallback,useEffect,useMemo,useRef,useState} from 'react';
+const Editor=lazy(()=>import('@monaco-editor/react'));
 import {Code2,FileCode2,X,Play,Save,Braces,Eye,Pencil} from 'lucide-react';
 import {marked} from 'marked';
 import type * as monaco from 'monaco-editor';
@@ -8,8 +9,8 @@ import {fileLanguage,fileName,type Tab,type OwDiagnostic} from '../lib/api';
 import {discoverOwTests} from '../lib/owTests';
 
 export type EditorSettings={fontSize:number;tabSize:number;wordWrap:boolean;minimap:boolean};
-type Props={tabs:Tab[];active:string;onActivate:(path:string)=>void;onClose:(path:string)=>void;onChange:(path:string,content:string)=>void;onSave:()=>void;onRun:()=>void;onRunTest:(path:string,filter?:string)=>void;diagnostics:OwDiagnostic[];jump:{path:string;line:number;column:number;nonce:number}|null;settings:EditorSettings};
-export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSave,onRun,onRunTest,diagnostics,jump,settings}:Props){
+type Props={tabs:Tab[];active:string;onActivate:(path:string)=>void;onClose:(path:string)=>void;onChange:(path:string,content:string)=>void;onReloadDisk:(path:string)=>void;onSave:()=>void;onRun:()=>void;onRunTest:(path:string,filter?:string)=>void;diagnostics:OwDiagnostic[];jump:{path:string;line:number;column:number;nonce:number}|null;settings:EditorSettings};
+export default function EditorPane({tabs,active,onActivate,onClose,onChange,onReloadDisk,onSave,onRun,onRunTest,diagnostics,jump,settings}:Props){
  const current=tabs.find(t=>t.path===active);
  const isMarkdown=!!current&&/\.(md|markdown)$/i.test(current.path);
  const [preview,setPreview]=useState(true);
@@ -29,6 +30,8 @@ export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSa
  const monacoRef=useRef<typeof import('monaco-editor')|null>(null);
  const gutterDecorations=useRef<monaco.editor.IEditorDecorationsCollection|null>(null);
  const onRunTestRef=useRef(onRunTest);
+ const onSaveRef=useRef(onSave);onSaveRef.current=onSave;
+ const onRunRef=useRef(onRun);onRunRef.current=onRun;
  const activeRef=useRef(active);
  onRunTestRef.current=onRunTest;
  activeRef.current=active;
@@ -86,8 +89,8 @@ export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSa
     onRunTestRef.current(activeRef.current,method.name);
    }
   });
-  editor.addCommand(monacoInstance.KeyMod.CtrlCmd|monacoInstance.KeyCode.KeyS,()=>onSave());
-  editor.addCommand(monacoInstance.KeyCode.F5,()=>onRun());
+  editor.addCommand(monacoInstance.KeyMod.CtrlCmd|monacoInstance.KeyCode.KeyS,()=>onSaveRef.current());
+  editor.addCommand(monacoInstance.KeyCode.F5,()=>onRunRef.current());
  },[onSave,onRun,diagnostics,active]);
  const opts=useMemo<monaco.editor.IStandaloneEditorConstructionOptions>(()=>({
   fontFamily:"'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
@@ -99,12 +102,12 @@ export default function EditorPane({tabs,active,onActivate,onClose,onChange,onSa
   overviewRulerBorder:false,stickyScroll:{enabled:true},wordBasedSuggestions:'currentDocument'
  }),[settings]);
  return <div className="editor-column">
-  <div className="editor-tabs">{tabs.map(tab=><div key={tab.path} className={`editor-tab ${tab.path===active?'active':''}`} onClick={()=>onActivate(tab.path)}><FileCode2 size={14} className={tab.path.endsWith('.ow')?'ow-file':''}/><span>{fileName(tab.path)}</span>{tab.content!==tab.saved&&<span className="dirty-dot"/>}<span className="tab-close" onClick={e=>{e.stopPropagation();onClose(tab.path)}}><X size={13}/></span></div>)}
+  <div className="editor-tabs">{tabs.map(tab=><div key={tab.path} className={`editor-tab ${tab.path===active?'active':''}`} onClick={()=>onActivate(tab.path)}><FileCode2 size={14} className={tab.path.endsWith('.ow')?'ow-file':''}/><span>{fileName(tab.path)}</span>{tab.content!==tab.saved&&<span className="dirty-dot"/>}{tab.diskState&&<span className="disk-conflict-dot" title={'Disk: '+tab.diskState}>!</span>}<span className="tab-close" onClick={e=>{e.stopPropagation();onClose(tab.path)}}><X size={13}/></span></div>)}
     <div className="editor-tabs-fill"/>
     {isMarkdown&&<button className={`tab-action ${preview?'active':''}`} title={preview?'Edit Markdown':'Preview Markdown'} onClick={()=>setPreview(p=>!p)}>{preview?<Pencil size={14}/>:<Eye size={15}/>}</button>}
     {current&&<>{testDeclarations.length>0&&<button className="tab-action ow-test-action" title="Run all OWUnit tests in this file" onClick={()=>onRunTest(current.path)}><Play size={14}/> Test</button>}<button className="tab-action" title="Save file (Ctrl+S)" onClick={onSave}><Save size={15}/></button><button className="tab-action run" title="Run OW (F5)" onClick={onRun}><Play size={14}/></button></>}
   </div>
-  {current? <><div className="editor-breadcrumb"><Code2 size={13}/><span>{current.path.split('/').join('  /  ')}</span><span className="editor-breadcrumb-type"><Braces size={13}/>{isMarkdown&&preview?'MARKDOWN PREVIEW':fileLanguage(current.path).toUpperCase()}</span></div>{isMarkdown&&preview?<div className="markdown-preview"><div className="markdown-body" dangerouslySetInnerHTML={{__html:html}}/></div>:<div className="monaco-wrapper"><Editor key={current.path} theme="owler-midnight" language={fileLanguage(current.path)} path={current.path} value={current.content} onMount={onMount} beforeMount={registerOwLanguage} onChange={v=>onChange(current.path,v??'')} options={opts} loading={<div className="editor-loading">Loading editor…</div>}/></div>}</>:
+  {current? <><div className="editor-breadcrumb"><Code2 size={13}/><span>{current.path.split('/').join('  /  ')}</span><span className="editor-breadcrumb-type"><Braces size={13}/>{isMarkdown&&preview?'MARKDOWN PREVIEW':fileLanguage(current.path).toUpperCase()}</span></div>{current.diskState&&<div className="disk-conflict-banner" role="status"><span>{current.diskState==='changed'?'This file was modified outside OWler. Your unsaved edits are preserved.':current.diskState==='missing'?'This file was deleted or renamed on disk. Your editor buffer is preserved.':'This file cannot be read from disk. Your editor buffer is preserved.'}</span>{current.diskState==='changed'&&<button onClick={()=>onReloadDisk(current.path)}>Reload disk version</button>}</div>}{isMarkdown&&preview?<div className="markdown-preview"><div className="markdown-body" dangerouslySetInnerHTML={{__html:html}}/></div>:<div className="monaco-wrapper"><Suspense fallback={<div className="editor-loading">Loading editor…</div>}><Editor key={current.path} theme="owler-midnight" language={fileLanguage(current.path)} path={current.path} value={current.content} onMount={onMount} beforeMount={registerOwLanguage} onChange={v=>onChange(current.path,v??'')} options={opts} loading={<div className="editor-loading">Loading editor…</div>}/></Suspense></div>}</>:
   <div className="editor-placeholder"><div className="hero-glyph"><span>O</span><span>W</span></div><p>THE NATIVE DEVELOPMENT ENVIRONMENT</p><h2>Make something <em>remarkable.</em></h2><div className="placeholder-keys"><div><kbd>Ctrl</kbd> + <kbd>P</kbd> <span>Quick open a file</span></div><div><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> <span>Command palette</span></div><div><kbd>F5</kbd><span>Run your OW project</span></div><div><kbd>Ctrl</kbd> + <kbd>`</kbd><span>Toggle terminal</span></div></div><div className="placeholder-foot">OW LANGUAGE <span>·</span> NIGHT FRAMEWORK <span>·</span> FLOW MODULITH</div></div>}
  </div>;
 }
