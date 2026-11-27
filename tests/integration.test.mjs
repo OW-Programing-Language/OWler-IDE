@@ -5,6 +5,7 @@ import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync} from
 import {createServer} from 'node:net';
 import {join,resolve,delimiter} from 'node:path';
 import {tmpdir} from 'node:os';
+import {extractToolchainZip} from '../scripts/extract-toolchain-zip.mjs';
 
 // This suite requires the freshly built OW compiler, not mocks or source scans.
 // CI sets OW_JAR after bundle:ow; a missing compiler is reported as skipped locally.
@@ -180,5 +181,27 @@ test('real JVM ServiceLoader extension works with the IDE classpath launch shape
   writeFileSync(join(dir,'main.ow'),'main:\n  print: extension("owler.test.ping")\n');
   const output=invoke('java',['-cp',[jar,extension].join(delimiter),'dev.oreo.Main','run','main.ow']);
   assert.match(output,/extension-ok/);
+ }finally{rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});
+
+test('JDK ZIP extraction handles nested toolchain folders and paths with spaces',{skip:!process.env.JAVA_HOME},()=>{
+ const dir=mkdtempSync(join(tmpdir(),'owler zip fixture '));
+ try{
+  const source=join(dir,'source files');
+  const folder='zig-x86_64-windows-0.14.1';
+  mkdirSync(join(source,folder,'lib'),{recursive:true});
+  writeFileSync(join(source,folder,'zig.exe'),'fixture executable');
+  writeFileSync(join(source,folder,'lib','std.zig'),'fixture library');
+  const archive=join(dir,'toolchain archive.zip');
+  const jarTool=join(process.env.JAVA_HOME,'bin',process.platform==='win32'?'jar.exe':'jar');
+  const made=spawnSync(jarTool,['--create','--file',archive,'--no-manifest','-C',source,folder],{encoding:'utf8',timeout:30000});
+  if(made.error)throw made.error;
+  assert.equal(made.status,0,made.stdout+'\n'+made.stderr);
+  const output=join(dir,'extracted files');
+  extractToolchainZip(process.env.JAVA_HOME,archive,output);
+  assert.equal(readFileSync(join(output,folder,'zig.exe'),'utf8'),'fixture executable');
+  assert.equal(readFileSync(join(output,folder,'lib','std.zig'),'utf8'),'fixture library');
+  const corrupt=join(dir,'bad.zip');writeFileSync(corrupt,'not a ZIP');
+  assert.throws(()=>extractToolchainZip(process.env.JAVA_HOME,corrupt,join(dir,'bad extraction')));
  }finally{rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 });
