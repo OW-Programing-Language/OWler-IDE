@@ -251,3 +251,7 @@ The organization URL is intentionally spelled as the actual GitHub account: **`O
 ## License
 
 MIT for Owler source (see `LICENSE`). OW and the bundled JDK/Zig have their own licenses; the bundling script retains source license notices.
+
+## OWler IDE v0.2.0
+
+The bundled OW compiler is pinned to 377b7c18981b9028e7f9dbbda4f6bf6aa8bfed32. The editor supports component and repository annotations, typed native collection suggestions, dictionary builtins and context-aware repository completion. New project starters include Night annotated HTTP, flOW modules and OWCord ping. Runtime JARs can be explicitly selected per primary workspace under Tools → JVM Runtime Extensions for Run, Check, Test and web preview. Selections are session-only and never loaded from untrusted project files; set credentials in the parent environment. Native builds and OW package are distinct from JVM extension runs; packaging extension JARs automatically is not supported. See [compatibility](docs/OW-COMPILER-COMPATIBILITY.md).

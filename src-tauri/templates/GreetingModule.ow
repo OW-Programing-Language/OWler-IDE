@@ -1,0 +1,17 @@
+module Starter.Greeting: GREETING
+  fn name() -> string:
+    return: "greeting"
+  fn requires() -> array:
+    return: []
+  fn register() -> int:
+    return: 0
+  fn start() -> int:
+    return: 0
+  fn stop() -> int:
+    return: 0
+  fn reload() -> int:
+    return: 0
+  fn on_event(type string, payload int) -> int:
+    return: 0
+  fn message() -> string:
+    return: "Hello from flOW"

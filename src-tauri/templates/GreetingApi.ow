@@ -1,0 +1,3 @@
+module_type GREETING:
+  include NATIVE_LIFECYCLE
+  fn message() -> string

@@ -1,0 +1,21 @@
+format: 1
+
+repositories:
+  - id: github
+    url: https://github.com
+
+dependencies:
+  - name: math
+    repository: github
+    path: OW-Programing-Language/ow-math-questions
+    version: c22d01cfee6be18d96d4c55b95b7e79892bca9f6
+
+  - name: owunit
+    repository: github
+    path: OW-Programing-Language/OWUnit
+    version: fde7cb6208305a4cda3bd623c9f520521f3137bf
+
+  - name: night
+    repository: github
+    path: OW-Programing-Language/night
+    version: b558eadb60104d59a9dc73deed52ed83cc59ec07

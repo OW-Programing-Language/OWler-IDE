@@ -250,6 +250,9 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
         "web" => include_str!("../templates/web.ow"),
         "ui" => include_str!("../templates/ui.ow"),
         "console" => include_str!("../templates/console.ow"),
+        "night" => include_str!("../templates/night.ow"),
+        "flow" => include_str!("../templates/flow.ow"),
+        "owcord" => include_str!("../templates/owcord.ow"),
         _ => return Err("Unknown project template".into()),
     };
     if !parent.is_dir() { return Err("Select a parent folder".into()); }
@@ -257,12 +260,34 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
     fs::create_dir(&dir).map_err(|e| format!("Could not create project: {e}"))?;
     let result = (|| -> Result<(), String> {
         create_file(&dir, "src/main.ow", template)?;
-        create_file(&dir, "dependencies.yml", include_str!("../templates/dependencies.yml"))?;
+        let manifest=match kind {
+            "night"=>include_str!("../templates/night-dependencies.yml"),
+            "flow"=>include_str!("../templates/flow-dependencies.yml"),
+            "owcord"=>include_str!("../templates/owcord-dependencies.yml"),
+            _=>include_str!("../templates/dependencies.yml"),
+        };
+        create_file(&dir, "dependencies.yml", manifest)?;
+        if kind=="night" {
+            create_file(&dir,"src/GreetingService.ow",include_str!("../templates/GreetingService.ow"))?;
+            create_file(&dir,"src/GreetingController.ow",include_str!("../templates/GreetingController.ow"))?;
+        }
+        if kind=="flow" {
+            create_file(&dir,"src/greeting/api/GreetingApi.ow",include_str!("../templates/GreetingApi.ow"))?;
+            create_file(&dir,"src/greeting/infra/GreetingModule.ow",include_str!("../templates/GreetingModule.ow"))?;
+        }
+        if kind=="owcord" {
+            create_file(&dir,".env.example","DISCORD_BOT_TOKEN=replace-with-token\nDISCORD_APPLICATION_ID=replace-with-id\nDISCORD_GUILD_ID=replace-with-id\nOWCORD_STORAGE=sqlite\n")?;
+            create_file(&dir,"RUNTIME.md","Build the pinned OWCord runtime-bridge with Maven (install OW compiler first). Select the built owcord-runtime JAR in Tools > JVM Runtime Extensions. Set DISCORD_* environment variables before launching OWler. Never commit tokens. The IDE does not automatically load .env. Use a development guild.\n")?;
+        }
+        if kind=="night" {
+            create_file(&dir,"RUNTIME.md","The annotated HTTP starter needs no extra JAR. For generated @Repository CRUD or @Transactional, build the matching Night platform JAR and select it in Tools > JVM Runtime Extensions. Configure Night JDBC and create the schema before invoking CRUD.\n")?;
+            create_file(&dir,"examples/UserRepository.ow","@Repository(\"app_users\", \"id\")\nclass UserRepository:\n")?;
+        }
         create_file(&dir, "tests/ExampleTest.ow",
             &include_str!("../templates/owunit-test.ow").replace("__TEST_CLASS__", "ExampleTest"))?;
         create_file(&dir, "examples/native-features.ow",
             include_str!("../templates/native-features.ow"))?;
-        create_file(&dir, ".gitignore", ".ow/deps/\ndist/\nbuild/\now-data.json\n*.exe\n*.msi\n")?;
+        create_file(&dir, ".gitignore", ".ow/deps/\ndist/\nbuild/\now-data.json\n.owcord-data/\n.env\n.env.*\n!.env.example\n*.exe\n*.msi\n")?;
         create_file(&dir, "README.md", &format!(
             "# {name}\n\nCreated with OWler IDE.\n\n\
             ## Getting started\n\n```sh\now deps install\now check src/main.ow\now run src/main.ow\now test tests/\n```\n\n\
@@ -271,7 +296,7 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
             `ow deps update` to refresh the generated `dependencies.lock.yml`.\n\
             Commit the manifest and lockfile, not the `.ow/deps/` cache.\n\n\
             To bundle this project:\n\n```sh\now package src/main.ow --name {name} --type {} --out dist\n```\n",
-            if kind == "web" { "web" } else if kind == "ui" { "gui" } else { "console" },
+            if kind == "web" || kind == "night" { "web" } else if kind == "ui" { "gui" } else { "console" },
         ))?;
         // Git is optional; the project remains usable without it.
         let _ = std::process::Command::new("git")
@@ -335,7 +360,7 @@ mod tests {
     let base = std::env::temp_dir().join(format!("owler-starters-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&base).unwrap();
     let result = (|| {
-      for kind in ["console", "web", "ui"] {
+      for kind in ["console", "web", "ui", "night", "flow", "owcord"] {
         let project = scaffold_project(&base, kind, kind)?;
         assert!(project.join("src/main.ow").is_file());
         assert!(project.join("dependencies.yml").is_file());

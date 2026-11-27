@@ -1,0 +1,11 @@
+import "@flow/src/App.ow"
+import "greeting/api/GreetingApi.ow"
+import "greeting/infra/GreetingModule.ow"
+
+main:
+  set app: new App()
+  call: app.use_native_as(Starter.Greeting, "GREETING")
+  call: assert(app.boot() == 1, "flOW boot")
+  set greeting GREETING: app.service("greeting")
+  print: greeting.message()
+  call: assert(app.stop() == 1, "flOW stop")

@@ -1,0 +1,8 @@
+@Controller
+class GreetingController:
+  @Inject
+  field private greeting GreetingService
+
+  @GetMapping("/api/greeting")
+  fn get() -> string:
+    return: this.greeting.message()
