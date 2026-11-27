@@ -14,6 +14,7 @@ pub struct AppState {
  pub roots:Mutex<Vec<PathBuf>>,
  pub sessions:Mutex<HashMap<String,Arc<terminal::TerminalSession>>>,
  pub discord:Mutex<discord::Discord>,
+ pub runtime_extensions:Mutex<HashMap<PathBuf,Vec<PathBuf>>>,
 }
 
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
@@ -28,7 +29,7 @@ pub fn run(){
    .plugin(tauri_plugin_updater::Builder::new().build());
  }
  builder
- .manage(AppState{workspace:Mutex::new(None),roots:Mutex::new(Vec::new()),sessions:Mutex::new(HashMap::new()),discord:Mutex::new(discord::Discord::default())})
+ .manage(AppState{workspace:Mutex::new(None),roots:Mutex::new(Vec::new()),sessions:Mutex::new(HashMap::new()),discord:Mutex::new(discord::Discord::default()),runtime_extensions:Mutex::new(HashMap::new())})
  .invoke_handler(tauri::generate_handler![
     workspace::set_workspace,workspace::get_workspace,workspace::list_files,
     workspace::read_file,workspace::write_file,workspace::new_entry,
@@ -39,7 +40,7 @@ pub fn run(){
     git::github_collaborators,git::github_collaborator_add,git::github_collaborator_remove,
     terminal::terminal_start,terminal::terminal_write,terminal::terminal_stop,terminal::terminal_history,terminal::terminal_resize,
     owunit::ow_test,owunit::create_owunit_test,
-    terminal::ow_task,terminal::ow_serve,terminal::reload_dependencies,ow::ow_toolchain_info,ow::ow_check,ow::ow_entry,ow::environment_status,
+    terminal::ow_task,terminal::ow_serve,terminal::reload_dependencies,ow::ow_toolchain_info,ow::set_runtime_extensions,ow::get_runtime_extensions,ow::ow_check,ow::ow_entry,ow::environment_status,
     discord::discord_activity,discord::discord_clear,
  ])
  .run(tauri::generate_context!())

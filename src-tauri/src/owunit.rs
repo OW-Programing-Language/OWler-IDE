@@ -79,7 +79,7 @@ pub async fn ow_test(target:String,filter:Option<String>,app:AppHandle,state:Sta
     checked_target(&root,&relative,filter.as_deref())?;
     if let Some(name)=filter.as_deref(){checked_filter(name)?;}
     let prefix=workspace::prefix_of(&target);
-    let (program,mut args)=ow::toolchain(&app)?;
+    let (program,mut args)=ow::project_toolchain(&app,&state,&root)?;
     args.extend(["test".into(),relative]);
     if let Some(name)=filter {args.extend(["--filter".into(),name]);}
     tauri::async_runtime::spawn_blocking(move||{

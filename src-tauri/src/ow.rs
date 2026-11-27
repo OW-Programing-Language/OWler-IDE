@@ -3,7 +3,7 @@ use tauri::{AppHandle,Manager};
 use serde::Serialize;
 
 #[derive(Serialize)]
-pub struct ToolchainInfo {pub source:String,pub available:bool,pub version:String,pub build_note:String}
+pub struct ToolchainInfo {pub source:String,pub available:bool,pub version:String,pub build_note:String,pub revision:Option<String>}
 
 pub fn bundled_bin(app:&AppHandle)->Option<PathBuf>{
  let res=app.path().resource_dir().ok()?;
@@ -54,16 +54,17 @@ pub fn toolchain(app:&AppHandle)->Result<(String,Vec<String>),String>{
 #[tauri::command]
 pub fn ow_toolchain_info(app:AppHandle)->ToolchainInfo{
  let result=toolchain(&app);
- let note="OW YAML-style `returns:` signatures, OWUnit tests, native integer arrays, dynamic UTF-8 strings and LLVM IR are available with the bundled pinned compiler. Native `ow build` supports only a subset of the language; try/catch, object graphs and Night routes still need the JVM runtime. `ow package --type web` uses that runtime and requires a full JDK 21+.".to_string();
+ let note="OW annotations, module discovery and generated repositories are interpreter-only; Night JDBC requires its platform JAR. Native LLVM supports typed string arrays and integer/string/mixed/nested dictionaries, but not every interpreter feature. Runtime extension JARs are selected explicitly per workspace.".to_string();
  match result {
   Ok((prog,args))=>{
    let source=if prog=="ow"{"PATH"}else if std::env::var("OWLER_OW_BIN").is_ok(){"Custom OWLER_OW_BIN"}else{"Bundled OW compiler + JDK"};
+   let revision=if source=="Bundled OW compiler + JDK"{app.path().resource_dir().ok().and_then(|r|std::fs::read_to_string(r.join("ow-toolchain/toolchain.json")).ok()).and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok()).and_then(|v|v.get("ow_ref").and_then(|r|r.as_str()).map(str::to_owned))}else{None};
    // Run the probe from a plain temp dir: inheriting Owler's own (possibly
    // verbatim) cwd would break the bundled JDK's java.home detection.
    let mut c=Command::new(&prog);c.args(&args).arg("version").current_dir(std::env::temp_dir());
-   match c.output(){Ok(o)=>ToolchainInfo{source:source.into(),available:o.status.success(),version:String::from_utf8_lossy(&o.stdout).trim().to_string(),build_note:note},Err(e)=>ToolchainInfo{source:source.into(),available:false,version:format!("OW is not available: {e}"),build_note:note}}
+   match c.output(){Ok(o)=>ToolchainInfo{source:source.into(),available:o.status.success(),version:String::from_utf8_lossy(&o.stdout).trim().to_string(),build_note:note,revision:revision.clone()},Err(e)=>ToolchainInfo{source:source.into(),available:false,version:format!("OW is not available: {e}"),build_note:note,revision:revision.clone()}}
   },
-  Err(e)=>ToolchainInfo{source:"Unavailable".into(),available:false,version:e,build_note:note}
+  Err(e)=>ToolchainInfo{source:"Unavailable".into(),available:false,version:e,build_note:note,revision:None}
  }
 }
 
@@ -100,7 +101,7 @@ pub fn ow_check(entry:String,app:AppHandle,state:tauri::State<'_,crate::AppState
     let (root,rel)=crate::workspace::resolve(&state,&entry)?;
     let _ = crate::workspace::existing_ow(&root,&rel)?;
     let prefix=crate::workspace::prefix_of(&entry);
-    let (program,mut args)=toolchain(&app)?;
+    let (program,mut args)=project_toolchain(&app,&state,&root)?;
     args.push("check".into());args.push(rel.clone());
     // Launch from a plain (non-verbatim) cwd: a `\\?\` working directory breaks
     // the bundled JDK's java.home detection when the install path has a space.
@@ -235,5 +236,64 @@ mod verbatim_tests{
    assert!(!line.contains(r"\\?\"), "verbatim prefix leaked into command line: {line}");
    assert!(line.contains("Owler IDE"), "space-containing install dir was lost: {line}");
   }
+ }
+}
+
+/** Explicit, session-scoped runtime JAR selection. Never load project manifests
+ * or search folders for executable extensions automatically. */
+pub(crate) fn project_extensions(state:&tauri::State<'_,crate::AppState>,root:&std::path::Path)->Result<Vec<std::path::PathBuf>,String>{
+ let root=std::fs::canonicalize(root).map_err(|e|e.to_string())?;
+ Ok(state.runtime_extensions.lock().map_err(|e|e.to_string())?.get(&root).cloned().unwrap_or_default())
+}
+fn validate_jars(paths:Vec<String>)->Result<Vec<PathBuf>,String>{
+ if paths.len()>32{return Err("Select at most 32 trusted runtime JARs".into())}
+ let mut selected=Vec::new();
+ for value in paths{
+  let path=std::fs::canonicalize(&value).map_err(|e|format!("Runtime JAR unavailable: {e}"))?;
+  if !path.is_file() || !path.extension().and_then(|x|x.to_str()).map(|x|x.eq_ignore_ascii_case("jar")).unwrap_or(false){
+   return Err("Runtime extensions must be existing .jar files".into())
+  }
+  if !selected.contains(&path){selected.push(path)}
+ }
+ Ok(selected)
+}
+#[tauri::command]
+pub fn set_runtime_extensions(paths:Vec<String>,expected_root:String,state:tauri::State<'_,crate::AppState>)->Result<Vec<String>,String>{
+ let root=std::fs::canonicalize(crate::workspace::root(&state)?).map_err(|e|e.to_string())?;
+ if std::fs::canonicalize(expected_root).map_err(|e|e.to_string())?!=root{return Err("Workspace changed while selecting runtime extensions".into())}
+ let selected=validate_jars(paths)?;
+ let display=selected.iter().map(|p|plain(p)).collect();
+ state.runtime_extensions.lock().map_err(|e|e.to_string())?.insert(root,selected);
+ Ok(display)
+}
+#[tauri::command]
+pub fn get_runtime_extensions(state:tauri::State<'_,crate::AppState>)->Result<Vec<String>,String>{
+ let root=crate::workspace::root(&state)?;
+ Ok(project_extensions(&state,&root)?.iter().map(|p|plain(p)).collect())
+}
+pub(crate) fn project_toolchain(app:&AppHandle,state:&tauri::State<'_,crate::AppState>,root:&std::path::Path)->Result<(String,Vec<String>),String>{
+ let (program,args)=toolchain(app)?;
+ let selected=project_extensions(state,root)?;
+ if selected.is_empty(){return Ok((program,args))}
+ if args.len()!=2 || args[0]!="-jar"{
+  return Err("Runtime extensions require the bundled OW compiler; unset OWLER_OW_BIN and use the bundled toolchain".into())
+ }
+ let paths=std::iter::once(PathBuf::from(&args[1])).chain(selected);
+ let cp=std::env::join_paths(paths.map(|p|PathBuf::from(plain(&p)))).map_err(|e|format!("Invalid runtime classpath: {e}"))?;
+ Ok((program,vec!["-cp".into(),cp.to_string_lossy().into_owned(),"dev.oreo.Main".into()]))
+}
+#[cfg(test)]
+mod extension_tests{
+ use super::*;
+ #[test] fn selection_rejects_missing_or_non_jar(){
+  assert!(validate_jars(vec!["missing-runtime.jar".into()]).is_err());
+  let dir=std::env::temp_dir().join(format!("owler-ext-{}",uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&dir).unwrap();
+  let path=dir.join("runtime extension.jar");
+  std::fs::write(&path,b"fixture").unwrap();
+  let raw=plain(&path);
+  assert_eq!(validate_jars(vec![raw.clone(),raw]).unwrap().len(),1);
+  assert!(validate_jars(vec![plain(&dir)]).is_err());
+  std::fs::remove_dir_all(dir).unwrap();
  }
 }
