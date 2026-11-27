@@ -25,6 +25,7 @@ export function modernizeOwFunctionSignature(line:string):string|null {
 
 /** Type suggestions are focused on YAML metadata, not every colon in OW. */
 export function isOwTypePosition(lineBeforeCursor:string):boolean {
- return /^\s*returns\s*:\s*[A-Za-z_]*$/.test(lineBeforeCursor) ||
+ return /^\s*(?:field\s+(?:private\s+)?|set\s+)[A-Za-z_]\w*\s+[A-Za-z_]*$/.test(lineBeforeCursor) ||
+        /^\s*returns\s*:\s*[A-Za-z_]*$/.test(lineBeforeCursor) ||
         /\bfn\s+[A-Za-z_]\w*\s*\([^)]*\b[A-Za-z_]\w*\s*:\s*[A-Za-z_]*$/.test(lineBeforeCursor);
 }

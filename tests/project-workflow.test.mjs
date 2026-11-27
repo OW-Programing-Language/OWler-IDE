@@ -57,7 +57,7 @@ test('reload updates opened tabs without discarding unsaved changes',()=>{
 
 test('bundled OW revision contains project dependency resolver',()=>{
  const script=read('scripts/bundle-ow.mjs');
- assert.match(script,/117884cfa873d38fccc312fc3a1f3af5552e1311/);
+ assert.match(script,/377b7c18981b9028e7f9dbbda4f6bf6aa8bfed32/);
 });
 
 test('right-click dependencies.yml invokes the real OW dependency update command',()=>{

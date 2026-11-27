@@ -52,6 +52,13 @@ test('Monaco advertises YAML signatures, native strings and OWUnit test support'
 });
 
 test('bundler is pinned to the merged OW YAML-signature compiler',()=>{
- assert.match(read('scripts/bundle-ow.mjs'),/117884cfa873d38fccc312fc3a1f3af5552e1311/);
+ assert.match(read('scripts/bundle-ow.mjs'),/377b7c18981b9028e7f9dbbda4f6bf6aa8bfed32/);
  assert.match(read('README.md'),/YAML-style/);
+});
+
+test('editor recognizes new OW annotations, native collections and discovery builtins',()=>{
+ const source=read('src/lib/owLanguage.ts');
+ for(const name of ['Service','Controller','Repository','Inject','Transactional','GetMapping','PostMapping','string_array','int_map','string_map','mixed_map','mixed_array','module_scan','component_scan','component_get','component_mount','map_keys','map_values','updateById','findById']) assert.ok(source.includes(name),name);
+ assert.match(source,/triggerCharacters/);
+ assert.match(source,/OW_REPOSITORY_METHODS/);
 });
