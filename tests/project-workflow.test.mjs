@@ -116,3 +116,11 @@ test('desktop explorer polls independently of editor and protects saves',()=>{
  assert.match(backend,/checked_write/);
  assert.match(read('src/components/EditorPane.tsx'),/Reload disk version/);
 });
+
+test('workspace creation and cloning do not replace the live roots before user opens the project',()=>{
+ const rust=read('src-tauri/src/workspace.rs'),git=read('src-tauri/src/git.rs');
+ const create=rust.slice(rust.indexOf('pub fn create_project('),rust.indexOf('#[cfg(test)]',rust.indexOf('pub fn create_project(')));
+ const clone=git.slice(git.indexOf('pub fn git_clone('),git.indexOf('/// Publish an existing',git.indexOf('pub fn git_clone(')));
+ assert.doesNotMatch(create,/state\.roots\.lock/);
+ assert.doesNotMatch(clone,/state\.workspace\.lock/);
+});

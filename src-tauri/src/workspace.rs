@@ -513,11 +513,10 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
 }
 
 #[tauri::command]
-pub fn create_project(base_dir: String, name: String, kind: String, state: State<'_, AppState>) -> Result<String, String> {
+pub fn create_project(base_dir: String, name: String, kind: String) -> Result<String, String> {
     let parent = fs::canonicalize(&base_dir).map_err(|e| e.to_string())?;
     let dir = scaffold_project(&parent, &name, &kind)?;
-    *state.workspace.lock().map_err(|e| e.to_string())? = Some(dir.clone());
-    *state.roots.lock().map_err(|e| e.to_string())? = vec![dir.clone()];
+    // Opening the new workspace is a separate, user-confirmed frontend operation.
     Ok(dir.to_string_lossy().to_string())
 }
 

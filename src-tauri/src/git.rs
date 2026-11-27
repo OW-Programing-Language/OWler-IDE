@@ -17,8 +17,11 @@ fn cmd(root:&Path,args:&[&str])->Result<String,String>{
 }
 
 #[tauri::command]
-pub fn git_status(state:State<'_,AppState>)->Result<GitSnapshot,String>{
+pub async fn git_status(state:State<'_,AppState>)->Result<GitSnapshot,String>{
  let root=workspace::root(&state)?;
+ tauri::async_runtime::spawn_blocking(move||git_status_for(&root)).await.map_err(|e|e.to_string())?
+}
+fn git_status_for(root:&std::path::Path)->Result<GitSnapshot,String>{
  let branch=match cmd(&root,&["branch","--show-current"]){Ok(s)=>s,Err(_)=>return Ok(GitSnapshot{branch:String::new(),remote:String::new(),changes:vec![],last_commits:vec![],initialized:false})};
  let remote=cmd(&root,&["remote","get-url","origin"]).unwrap_or_default();
  let lines=cmd(&root,&["-c","core.quotePath=false","status","--porcelain=v1","--untracked-files=all"])?;
@@ -32,8 +35,11 @@ pub struct BranchList {pub current:String,pub branches:Vec<String>}
 /// Structured branch listing so the UI can render a switcher that highlights the
 /// checked-out branch without having to parse porcelain output itself.
 #[tauri::command]
-pub fn git_branches(state:State<'_,AppState>)->Result<BranchList,String>{
+pub async fn git_branches(state:State<'_,AppState>)->Result<BranchList,String>{
  let root=workspace::root(&state)?;
+ tauri::async_runtime::spawn_blocking(move||git_branches_for(&root)).await.map_err(|e|e.to_string())?
+}
+fn git_branches_for(root:&std::path::Path)->Result<BranchList,String>{
  let current=cmd(&root,&["branch","--show-current"]).unwrap_or_default();
  let raw=cmd(&root,&["branch","--list","--format=%(refname:short)"]).unwrap_or_default();
  let branches=raw.lines().map(|l|l.trim().to_string()).filter(|l|!l.is_empty()).collect();
@@ -72,7 +78,7 @@ pub fn git_action(action:String,message:Option<String>,file:Option<String>,state
 }
 
 #[tauri::command]
-pub fn git_clone(url:String, parent:String, name:Option<String>,state:State<'_,AppState>)->Result<String,String>{
+pub fn git_clone(url:String, parent:String, name:Option<String>)->Result<String,String>{
  if !(url.starts_with("https://github.com/")||url.starts_with("git@github.com:"))||url.starts_with('-') {return Err("Provide a GitHub HTTPS or SSH clone URL".into());}
  let parent=std::fs::canonicalize(parent).map_err(|e|e.to_string())?;
  if !parent.is_dir(){return Err("Pick a destination folder".into())}
@@ -88,7 +94,7 @@ pub fn git_clone(url:String, parent:String, name:Option<String>,state:State<'_,A
  let repo=args[2].rsplit('/').next().unwrap_or("project").trim_end_matches(".git");parent.join(repo)
  };
  if !dir.is_dir(){return Err(format!("Clone finished but the expected directory was not found; candidates: {}",files.count()))}
- *state.workspace.lock().map_err(|e|e.to_string())?=Some(std::fs::canonicalize(&dir).map_err(|e|e.to_string())?);
+ // The frontend explicitly opens the cloned folder after confirming unsaved edits.
  Ok(dir.to_string_lossy().to_string())
 }
 

@@ -44,6 +44,7 @@ export default function App(){
  const rootsRef=useRef(roots);rootsRef.current=roots;
  const syncEpoch=useRef(0);
  const syncPaused=useRef(0);
+ const gitRefreshId=useRef(0);
  const [syncStatus,setSyncStatus]=useState<'idle'|'live'|'error'>('idle');
  const [active,setActive]=useState('');
  const [section,setSection]=useState<Section>('files');
@@ -130,8 +131,12 @@ export default function App(){
  },[toast]);
  const refreshGit=useCallback(async()=>{
   if(!isDesktop)return;
-  try{setGit(await call<GitSnapshot>('git_status'))}catch{setGit(emptyGit)}
-  try{setBranches(await call<BranchList>('git_branches'))}catch{setBranches({current:'',branches:[]})}
+  const id=++gitRefreshId.current,epoch=syncEpoch.current;
+  const [gitResult,branchResult]=await Promise.all([
+   call<GitSnapshot>('git_status').catch(()=>emptyGit),
+   call<BranchList>('git_branches').catch(()=>({current:'',branches:[]}))
+  ]);
+  if(id===gitRefreshId.current&&epoch===syncEpoch.current){setGit(gitResult);setBranches(branchResult)}
  },[]);
 
  // Poll only while a desktop workspace is open. One request at a time,
@@ -145,7 +150,7 @@ export default function App(){
   const expectedRoots=JSON.parse(rootKey) as string[];
   let treeRevision:string|undefined;
   const disk=new Map<string,DiskUpdate>();
-  let ticks=0;
+  let ticks=0,gitBusy=false;
   const tick=async()=>{
    if(cancelled||busy)return;
    busy=true;
@@ -164,7 +169,7 @@ export default function App(){
     for(const update of snapshot.files)disk.set(update.path,update);
     setTabs(previous=>reconcileDiskTabs(previous,requested,disk));
     setSyncStatus('live');
-    if(snapshot.tree||snapshot.files.length||++ticks%5===0)void refreshGit();
+    if((snapshot.tree||snapshot.files.length||++ticks%5===0)&&!gitBusy){gitBusy=true;void refreshGit().finally(()=>{gitBusy=false})}
    }catch{
     if(!cancelled&&epoch===syncEpoch.current)setSyncStatus('error');
    }finally{
@@ -223,7 +228,7 @@ export default function App(){
  // Reload the exact project whose manifest was right-clicked (including extra roots).
  // Save only the manifest when it has unsaved Monaco edits, never unrelated tabs.
  const reloadDependencies=useCallback(async(path:string)=>{
-  if(reloadingDependencies)return;
+  if(reloadingDependencies||syncPaused.current)return;
   if(!/^(?:@\d+\/)?dependencies\.yml$/.test(path)){
    toast('Select the project-root dependencies.yml file',true);return;
   }
@@ -231,11 +236,13 @@ export default function App(){
   const modified=tabs.find(tab=>tab.path===path&&tab.content!==tab.saved);
   if(modified&&!confirm('Save changes to dependencies.yml before reloading OW libraries?'))return;
   setReloadingDependencies(true);
+  const expectedRoots=[...rootsRef.current];
+  syncEpoch.current++;syncPaused.current++;
   try{
    if(modified){
     const disk=await call<string>('read_file',{path});
     if(disk!==modified.saved&&!confirm('dependencies.yml was also modified outside OWler. Overwrite the external changes with the open editor version?'))return;
-    await call('write_file_checked',{path,content:modified.content,expectedContent:disk,expectedRoots:[...rootsRef.current]});
+    await call('write_file_checked',{path,content:modified.content,expectedContent:disk,expectedRoots});
     setTabs(previous=>previous.map(tab=>tab.path===path?{...tab,saved:modified.content}:tab));
    }
    toast('Reloading OW dependencies from dependencies.yml…');
@@ -243,7 +250,7 @@ export default function App(){
    await reloadProject(true);
    toast('OW dependencies reloaded · dependencies.lock.yml updated');
   }catch(e){toast('Could not reload dependencies: '+String(e).slice(0,350),true)}
-  finally{setReloadingDependencies(false)}
+  finally{syncPaused.current--;syncEpoch.current++;setReloadingDependencies(false)}
  },[reloadingDependencies,tabs,reloadProject,toast]);
  const refreshAuth=useCallback(async()=>{
   if(!isDesktop)return;
@@ -264,16 +271,18 @@ export default function App(){
  const addFolder=useCallback(async()=>{
   if(!workspace){void pickOpen();return}
   const picked=await open({directory:true,multiple:false,title:'Add a folder to this workspace'});
-  if(!picked||Array.isArray(picked))return;
+  if(!picked||Array.isArray(picked)||syncPaused.current)return;
   syncEpoch.current++;syncPaused.current++;
   try{const t=await call<FileNode[]>('add_root',{path:picked});setTree(t);setRoots(await call<string[]>('workspace_roots'));toast(`Added ${String(picked).split(/[\\/]/).pop()}`)}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[workspace,toast]);
  const removeFolder=useCallback(async(abs:string)=>{
+  if(syncPaused.current)return;
   if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Changing workspace roots closes open tabs. Discard unsaved edits?'))return;
   syncEpoch.current++;syncPaused.current++;
   try{const t=await call<FileNode[]>('remove_root',{path:abs});setTree(t);const rs=await call<string[]>('workspace_roots');setTabs([]);setActive('');setRoots(rs);if(rs.length){setWorkspacePath(rs[0]);void refreshGit()}else{setWorkspacePath('')}toast('Removed folder from workspace')}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[refreshGit,toast]);
  const makePrimaryFolder=useCallback(async(abs:string)=>{
+  if(syncPaused.current)return;
   if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Changing workspace roots closes open tabs. Discard unsaved edits?'))return;
   syncEpoch.current++;syncPaused.current++;
   try{const t=await call<FileNode[]>('set_primary_root',{path:abs});setTree(t);setTabs([]);setActive('');setRoots(await call<string[]>('workspace_roots'));setWorkspacePath(abs);void refreshGit();toast(`${abs.split(/[\\/]/).pop()} is now the primary folder`)}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
@@ -282,12 +291,13 @@ export default function App(){
  const rootAbs=useCallback((nodePath:string)=>{const m=nodePath.match(/^@(\d+)$/);return roots[m?Number(m[1]):0]||''},[roots]);
  const isRootNode=useCallback((node:FileNode)=>node.directory&&(node.path===''||/^@\d+$/.test(node.path)),[]);
  const openWorkspace=useCallback(async(path:string)=>{
-  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Open another project and discard unsaved edits?'))return;
+  if(syncPaused.current)return false;
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Open another project and discard unsaved edits?'))return false;
   syncEpoch.current++;syncPaused.current++;
   try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots(await call<string[]>('workspace_roots'));setTree(entries);setTabs([]);setActive('');setProblems([]);setTestReport(null);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
    const snapshot=await call<GitSnapshot>('git_status');setGit(snapshot);
-   toast(`Opened ${path.split(/[\\/]/).pop()}`);
-  }catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
+   toast(`Opened ${path.split(/[\\/]/).pop()}`);return true;
+  }catch(e){toast(String(e),true);return false}finally{syncPaused.current--;syncEpoch.current++}
  },[toast]);
  useEffect(()=>{
   if(!isDesktop)return;
@@ -299,7 +309,8 @@ export default function App(){
  const openFile=useCallback(async(path:string)=>{
   setSection('files');
   if(tabs.some(t=>t.path===path)){setActive(path);return}
-  try{const content=await call<string>('read_file',{path});setTabs(t=>[...t,{path,content,saved:content}]);setActive(path)}catch(e){toast(String(e),true)}
+  const epoch=syncEpoch.current;
+  try{const content=await call<string>('read_file',{path});if(epoch!==syncEpoch.current)return;setTabs(t=>t.some(tab=>tab.path===path)?t:[...t,{path,content,saved:content}]);setActive(path)}catch(e){toast(String(e),true)}
  },[tabs,toast]);
  const closeFile=useCallback((path:string)=>{
   const t=tabs.find(t=>t.path===path);
@@ -578,7 +589,7 @@ export default function App(){
   if(!isDesktop){toast('Use the desktop app',true);return}
   const parent=await open({directory:true,multiple:false,title:'Choose where to create the OW project'});
   if(typeof parent!=='string')return;
-  try{const path=await call<string>('create_project',{baseDir:parent,name:newProject.name,kind:newProject.kind});setShowNewProject(false);await openWorkspace(path);await refreshTree();void openFile('src/main.ow')}catch(e){toast(String(e),true)}
+  try{const path=await call<string>('create_project',{baseDir:parent,name:newProject.name,kind:newProject.kind});setShowNewProject(false);if(await openWorkspace(path)){const content=await call<string>('read_file',{path:'src/main.ow'});setTabs([{path:'src/main.ow',content,saved:content}]);setActive('src/main.ow')}}catch(e){toast(String(e),true)}
  },[newProject,openWorkspace,openFile,refreshTree,toast]);
  const cloneProject=useCallback(async()=>{
   const parent=await open({directory:true,multiple:false,title:'Choose where to clone this GitHub repository'});
