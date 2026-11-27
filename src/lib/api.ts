@@ -16,7 +16,10 @@ export type OwCheckReport = {ok:boolean;output:string;diagnostics:OwDiagnostic[]
 export type OwTestResult = {name:string;file:string;passed:boolean;message:string};
 export type OwTestReport = {ok:boolean;passed:number;failed:number;output:string;results:OwTestResult[];exit_code:number|null};
 export type TerminalExit = {session_id:string;code:number};
-export type Tab = {path:string;content:string;saved:string};
+export type DiskState='changed'|'missing'|'unreadable';
+export type Tab = {path:string;content:string;saved:string;diskState?:DiskState};
+export type DiskUpdate={path:string;revision:string}&({status:'present';text:string}|{status:'missing'|'unreadable'});
+export type WorkspaceSnapshot={tree:FileNode[]|null;tree_revision:string;files:DiskUpdate[]};
 export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 export async function call<T>(command:string,args:Record<string,unknown>={}):Promise<T>{

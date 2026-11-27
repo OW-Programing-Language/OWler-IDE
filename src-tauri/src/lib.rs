@@ -32,7 +32,7 @@ pub fn run(){
  .manage(AppState{workspace:Mutex::new(None),roots:Mutex::new(Vec::new()),sessions:Mutex::new(HashMap::new()),discord:Mutex::new(discord::Discord::default()),runtime_extensions:Mutex::new(HashMap::new())})
  .invoke_handler(tauri::generate_handler![
     workspace::set_workspace,workspace::get_workspace,workspace::list_files,
-    workspace::read_file,workspace::write_file,workspace::new_entry,
+    workspace::read_file,workspace::write_file,workspace::write_file_checked,workspace::sync_workspace,workspace::new_entry,
     workspace::rename_entry,workspace::delete_entry,workspace::copy_entry,workspace::create_project,
     workspace::workspace_roots,workspace::add_root,workspace::remove_root,workspace::set_primary_root,
     git::git_status,git::git_action,git::git_branches,git::git_clone,git::github_publish,git::github_pr_list,git::github_pr_create,

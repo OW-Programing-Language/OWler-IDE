@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
+import ts from 'typescript';
 
 const read=path=>readFileSync(resolve(import.meta.dirname,'..',path),'utf8');
 
@@ -81,6 +82,37 @@ test('unsaved dependency changes require confirmation before the manifest is sav
  assert.match(app,/const modified=tabs\.find/);
  assert.match(app,/if\(modified&&!confirm/);
  assert.match(app,/disk!==modified\.saved&&!confirm/);
- assert.match(app,/write_file',\{path,content:modified\.content\}/);
+ assert.match(app,/write_file_checked',\{path,content:modified\.content/);
  assert.match(app,/reloadingDependencies/);
+});
+
+test('live disk reconciliation protects dirty buffers and stale observations',async()=>{
+ const source=ts.transpileModule(read('src/lib/liveSync.ts'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
+ const {reconcileDiskTabs}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+ const path='src/main.ow', requested=new Map([[path,'original']]);
+ const disk=new Map([[path,{path,revision:'2',status:'present',text:'agent edit'}]]);
+ const clean={path,content:'original',saved:'original'};
+ const dirty={...clean,content:'my edit'};
+ assert.deepEqual(reconcileDiskTabs([clean],requested,disk)[0],{path,content:'agent edit',saved:'agent edit',diskState:undefined});
+ const conflict=reconcileDiskTabs([dirty],requested,disk)[0];
+ assert.equal(conflict.content,'my edit');assert.equal(conflict.saved,'original');assert.equal(conflict.diskState,'changed');
+ const stale={path,content:'new save',saved:'new save'};
+ assert.equal(reconcileDiskTabs([stale],requested,disk)[0],stale);
+ const absent=new Map([[path,{path,revision:'3',status:'missing'}]]);
+ assert.equal(reconcileDiskTabs([dirty],requested,absent)[0].diskState,'missing');
+ assert.equal(reconcileDiskTabs([dirty],requested,absent)[0].content,'my edit');
+ const unreadable=new Map([[path,{path,revision:'4',status:'unreadable'}]]);
+ assert.equal(reconcileDiskTabs([clean],requested,unreadable)[0].diskState,'unreadable');
+ const unchanged=[clean];
+ assert.equal(reconcileDiskTabs(unchanged,requested,new Map()),unchanged);
+});
+test('desktop explorer polls independently of editor and protects saves',()=>{
+ const app=read('src/App.tsx'),backend=read('src-tauri/src/workspace.rs');
+ assert.match(app,/sync_workspace/);
+ assert.match(app,/setTimeout\(tick,1200\)/);
+ assert.match(app,/reconcileDiskTabs/);
+ assert.match(app,/write_file_checked/);
+ assert.match(backend,/spawn_blocking/);
+ assert.match(backend,/checked_write/);
+ assert.match(read('src/components/EditorPane.tsx'),/Reload disk version/);
 });

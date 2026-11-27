@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useMemo,useState} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {open} from '@tauri-apps/plugin-dialog';
 import {openUrl} from '@tauri-apps/plugin-opener';
 import {
@@ -11,9 +11,10 @@ import {
 } from 'lucide-react';
 import EditorPane from './components/EditorPane';
 import OwTestPanel from './components/OwTestPanel';
+import {reconcileDiskTabs} from './lib/liveSync';
 import {discoverOwTests,isOwTestFile} from './lib/owTests';
 import {TerminalPanel,type Session} from './components/TerminalPanel';
-import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type OwTestReport,type OwTestResult,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
+import {call,isDesktop,flattenNodes,fileName,dirname,statusName,COLLAB_PERMISSIONS,type FileNode,type GitSnapshot,type Tab,type DiskUpdate,type WorkspaceSnapshot,type ToolchainInfo,type OwDiagnostic,type OwCheckReport,type OwTestReport,type OwTestResult,type GithubPullRequest,type CliAvailability,type BranchList,type GithubAuth,type Collaborator} from './lib/api';
 
 type Section='files'|'search'|'git'|'tools';
 type Toast={id:number;message:string;error?:boolean};
@@ -39,6 +40,11 @@ export default function App(){
  const [settings,setSettings]=useState(()=>{try{return {fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true,...JSON.parse(localStorage.getItem('owler:settings')||'{}')}}catch{return {fontSize:13,tabSize:2,wordWrap:false,minimap:true,discord:true}}});
  const updateSetting=useCallback((k:string,v:unknown)=>setSettings((s:Record<string,unknown>)=>{const next={...s,[k]:v};localStorage.setItem('owler:settings',JSON.stringify(next));return next}),[]);
  const [tabs,setTabs]=useState<Tab[]>([]);
+ const tabsRef=useRef(tabs);tabsRef.current=tabs;
+ const rootsRef=useRef(roots);rootsRef.current=roots;
+ const syncEpoch=useRef(0);
+ const syncPaused=useRef(0);
+ const [syncStatus,setSyncStatus]=useState<'idle'|'live'|'error'>('idle');
  const [active,setActive]=useState('');
  const [section,setSection]=useState<Section>('files');
  const [toolchain,setToolchain]=useState<ToolchainInfo>(blankToolchain);
@@ -127,18 +133,65 @@ export default function App(){
   try{setGit(await call<GitSnapshot>('git_status'))}catch{setGit(emptyGit)}
   try{setBranches(await call<BranchList>('git_branches'))}catch{setBranches({current:'',branches:[]})}
  },[]);
+
+ // Poll only while a desktop workspace is open. One request at a time,
+ // background Rust traversal, unchanged tree/content omitted from IPC.
+ // The cached observations are reapplied to the current editor state so an
+ // undo or save can resolve a conflict without requiring another disk edit.
+ const rootKey=JSON.stringify(roots);
+ useEffect(()=>{
+  if(!isDesktop||!roots.length){setSyncStatus('idle');return}
+  let cancelled=false,busy=false,timer:ReturnType<typeof setTimeout>|undefined;
+  const expectedRoots=JSON.parse(rootKey) as string[];
+  let treeRevision:string|undefined;
+  const disk=new Map<string,DiskUpdate>();
+  let ticks=0;
+  const tick=async()=>{
+   if(cancelled||busy)return;
+   busy=true;
+   const epoch=syncEpoch.current;
+   try{
+    if(syncPaused.current)return;
+    const requested=new Map(tabsRef.current.map(t=>[t.path,t.saved]));
+    for(const path of disk.keys())if(!requested.has(path))disk.delete(path);
+    const known=Object.fromEntries([...disk].map(([path,value])=>[path,value.revision]));
+    const snapshot=await call<WorkspaceSnapshot>('sync_workspace',{
+     paths:[...requested.keys()],known,treeRevision,expectedRoots
+    });
+    if(cancelled||epoch!==syncEpoch.current||syncPaused.current)return;
+    treeRevision=snapshot.tree_revision;
+    if(snapshot.tree)setTree(snapshot.tree);
+    for(const update of snapshot.files)disk.set(update.path,update);
+    setTabs(previous=>reconcileDiskTabs(previous,requested,disk));
+    setSyncStatus('live');
+    if(snapshot.tree||snapshot.files.length||++ticks%5===0)void refreshGit();
+   }catch{
+    if(!cancelled&&epoch===syncEpoch.current)setSyncStatus('error');
+   }finally{
+    busy=false;
+    if(!cancelled)timer=setTimeout(tick,1200);
+   }
+  };
+  const focus=()=>{if(timer)clearTimeout(timer);void tick()};
+  window.addEventListener('focus',focus);
+  void tick();
+  return()=>{cancelled=true;if(timer)clearTimeout(timer);window.removeEventListener('focus',focus)};
+ },[rootKey,refreshGit]);
+
  // Refresh the explorer AND all open editor buffers from disk. Claude/Codex may
  // edit files outside of Monaco, so refreshing only the tree is insufficient.
  // Never overwrite an editor buffer that has unsaved user changes.
  const reloadProject=useCallback(async(silent=false)=>{
   if(!workspace){toast('Open an OW project to reload',true);return}
   if(!isDesktop){toast('Reload Project requires the desktop app',true);return}
+  const epoch=syncEpoch.current;
   try{
    const freshTree=await call<FileNode[]>('list_files');
    const disk=await Promise.all(tabs.map(async tab=>{
     try{return {path:tab.path,text:await call<string>('read_file',{path:tab.path}),error:false}}
     catch{return {path:tab.path,text:'',error:true}}
    }));
+   if(epoch!==syncEpoch.current)return;
    const contents=new Map(disk.filter(item=>!item.error).map(item=>[item.path,item.text]));
    const changed=tabs.filter(tab=>contents.has(tab.path)&&contents.get(tab.path)!==tab.saved);
    const protectedTabs=changed.filter(tab=>tab.content!==tab.saved);
@@ -182,7 +235,7 @@ export default function App(){
    if(modified){
     const disk=await call<string>('read_file',{path});
     if(disk!==modified.saved&&!confirm('dependencies.yml was also modified outside OWler. Overwrite the external changes with the open editor version?'))return;
-    await call('write_file',{path,content:modified.content});
+    await call('write_file_checked',{path,content:modified.content,expectedContent:disk,expectedRoots:[...rootsRef.current]});
     setTabs(previous=>previous.map(tab=>tab.path===path?{...tab,saved:modified.content}:tab));
    }
    toast('Reloading OW dependencies from dependencies.yml…');
@@ -212,22 +265,29 @@ export default function App(){
   if(!workspace){void pickOpen();return}
   const picked=await open({directory:true,multiple:false,title:'Add a folder to this workspace'});
   if(!picked||Array.isArray(picked))return;
-  try{const t=await call<FileNode[]>('add_root',{path:picked});setTree(t);setRoots(await call<string[]>('workspace_roots'));toast(`Added ${String(picked).split(/[\\/]/).pop()}`)}catch(e){toast(String(e),true)}
+  syncEpoch.current++;syncPaused.current++;
+  try{const t=await call<FileNode[]>('add_root',{path:picked});setTree(t);setRoots(await call<string[]>('workspace_roots'));toast(`Added ${String(picked).split(/[\\/]/).pop()}`)}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[workspace,toast]);
  const removeFolder=useCallback(async(abs:string)=>{
-  try{const t=await call<FileNode[]>('remove_root',{path:abs});setTree(t);const rs=await call<string[]>('workspace_roots');setRoots(rs);if(rs.length){setWorkspacePath(rs[0]);void refreshGit()}else{setWorkspacePath('')}toast('Removed folder from workspace')}catch(e){toast(String(e),true)}
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Changing workspace roots closes open tabs. Discard unsaved edits?'))return;
+  syncEpoch.current++;syncPaused.current++;
+  try{const t=await call<FileNode[]>('remove_root',{path:abs});setTree(t);const rs=await call<string[]>('workspace_roots');setTabs([]);setActive('');setRoots(rs);if(rs.length){setWorkspacePath(rs[0]);void refreshGit()}else{setWorkspacePath('')}toast('Removed folder from workspace')}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[refreshGit,toast]);
  const makePrimaryFolder=useCallback(async(abs:string)=>{
-  try{const t=await call<FileNode[]>('set_primary_root',{path:abs});setTree(t);setRoots(await call<string[]>('workspace_roots'));setWorkspacePath(abs);void refreshGit();toast(`${abs.split(/[\\/]/).pop()} is now the primary folder`)}catch(e){toast(String(e),true)}
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Changing workspace roots closes open tabs. Discard unsaved edits?'))return;
+  syncEpoch.current++;syncPaused.current++;
+  try{const t=await call<FileNode[]>('set_primary_root',{path:abs});setTree(t);setTabs([]);setActive('');setRoots(await call<string[]>('workspace_roots'));setWorkspacePath(abs);void refreshGit();toast(`${abs.split(/[\\/]/).pop()} is now the primary folder`)}catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[refreshGit,toast]);
  // Map a tree root node (path '' or '@i') to its absolute folder path.
  const rootAbs=useCallback((nodePath:string)=>{const m=nodePath.match(/^@(\d+)$/);return roots[m?Number(m[1]):0]||''},[roots]);
  const isRootNode=useCallback((node:FileNode)=>node.directory&&(node.path===''||/^@\d+$/.test(node.path)),[]);
  const openWorkspace=useCallback(async(path:string)=>{
-  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots([path]);setTree(entries);setTabs([]);setActive('');setProblems([]);setTestReport(null);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
+  if(tabsRef.current.some(t=>t.content!==t.saved)&&!confirm('Open another project and discard unsaved edits?'))return;
+  syncEpoch.current++;syncPaused.current++;
+  try{const entries=await call<FileNode[]>('set_workspace',{path});setWorkspacePath(path);setRoots(await call<string[]>('workspace_roots'));setTree(entries);setTabs([]);setActive('');setProblems([]);setTestReport(null);setGit(emptyGit);localStorage.setItem('owler:last-workspace',path);setSection('files');
    const snapshot=await call<GitSnapshot>('git_status');setGit(snapshot);
    toast(`Opened ${path.split(/[\\/]/).pop()}`);
-  }catch(e){toast(String(e),true)}
+  }catch(e){toast(String(e),true)}finally{syncPaused.current--;syncEpoch.current++}
  },[toast]);
  useEffect(()=>{
   if(!isDesktop)return;
@@ -249,10 +309,44 @@ export default function App(){
  },[tabs,active]);
  const changeFile=useCallback((path:string,content:string)=>setTabs(ts=>ts.map(t=>t.path===path?{...t,content}:t)),[]);
  const saveAll=useCallback(async()=>{
-  const dirty=tabs.filter(t=>t.content!==t.saved);
+  const dirty=tabsRef.current.filter(t=>t.content!==t.saved);
   if(!dirty.length)return true;
-  try{for(const t of dirty)await call('write_file',{path:t.path,content:t.content});setTabs(ts=>ts.map(t=>{const saved=dirty.find(d=>d.path===t.path);return saved?{...t,saved:saved.content}:t}));void refreshGit();toast(`Saved ${dirty.length} file${dirty.length===1?'':'s'}`);return true;}catch(e){toast(String(e),true);return false;}
- },[tabs,refreshGit,toast]);
+  if(syncPaused.current)return false;
+  const expectedRoots=[...rootsRef.current];
+  syncEpoch.current++;syncPaused.current++;
+  try{
+   for(const t of dirty){
+    let expected:string|null=t.saved;
+    if(t.diskState==='missing'){
+     if(!confirm(t.path+' was deleted or renamed outside OWler. Recreate it with your editor contents?'))return false;
+     expected=null;
+    }else{
+     const disk=await call<string>('read_file',{path:t.path});
+     if(disk!==t.saved){
+      if(!confirm(t.path+' changed outside OWler. Overwrite the latest disk version with your editor contents? Cancel to keep both versions.'))return false;
+      expected=disk;
+     }
+    }
+    await call('write_file_checked',{path:t.path,content:t.content,expectedContent:expected,expectedRoots});
+    setTabs(ts=>ts.map(tab=>tab.path===t.path?{...tab,saved:t.content,diskState:undefined}:tab));
+   }
+   void refreshGit();toast('Saved '+dirty.length+' file(s)');return true;
+  }catch(e){toast(String(e),true);return false;}
+  finally{syncPaused.current--;syncEpoch.current++}
+ },[refreshGit,toast]);
+ const reloadDiskFile=useCallback(async(path:string)=>{
+  const tab=tabsRef.current.find(t=>t.path===path);
+  if(!tab)return;
+  if(tab.content!==tab.saved&&!confirm('Discard unsaved editor changes and load the current disk version of '+path+'?'))return;
+  const epoch=syncEpoch.current;
+  try{
+   const text=await call<string>('read_file',{path});
+   if(epoch!==syncEpoch.current)return;
+   setTabs(previous=>previous.map(t=>t.path===path&&t.content===tab.content&&t.saved===tab.saved?
+    {...t,content:text,saved:text,diskState:undefined}:t));
+   toast('Reloaded '+path);
+  }catch(e){toast('Cannot reload disk version: '+String(e),true)}
+ },[toast]);
  const runOwTests=useCallback(async(target='.',filter?:string)=>{
   if(!workspace){toast('Open an OW project before running tests',true);return}
   if(testBusy)return;
@@ -579,7 +673,7 @@ export default function App(){
     {([['files',Files,'Explorer'],['search',Search,'Search'],['git',GitBranch,'Source control'],['tools',Layers,'Tools & extensions']] as const).map(([key,Icon,label])=><button key={key} className={section===key&&sidebarVisible?'active':''} title={label} onClick={()=>{setSection(key);setSidebarVisible(true)}}><Icon size={20}/>{key==='git'&&git.changes.length>0&&<span className="rail-dot"/>}</button>)}
    </div><div className="rail-bottom"><button title="GitHub Organization" onClick={()=>void openUrl(org)}><Cloud size={20}/></button><button title="Settings" onClick={()=>setShowSettings(true)}><Settings2 size={20}/></button></div></div>
    {sidebarVisible&&<aside className="sidebar" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
-    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void reloadProject()} title="Reload project (refresh open files and explorer)"><RefreshCw size={14}/></button></div></div>
+    {section==='files'&&<><div className="sidebar-heading"><span>EXPLORER {workspace&&<span className={'explorer-sync '+syncStatus} title={syncStatus==='live'?'Automatically synchronized with disk':syncStatus==='error'?'Disk synchronization failed; retrying':'Starting disk synchronization'}>{syncStatus==='live'?'● LIVE':syncStatus==='error'?'● RETRY':'● SYNC'}</span>}</span><div><button onClick={()=>void newEntry(false)} title="New file"><FilePlus size={15}/></button><button onClick={()=>void newEntry(true)} title="New folder"><FolderPlus size={15}/></button><button onClick={()=>void addFolder()} title="Add folder to workspace"><FolderPlus size={15}/><span className="plus-mini">+</span></button><button onClick={()=>void reloadProject()} title="Reload project (refresh open files and explorer)"><RefreshCw size={14}/></button></div></div>
      {workspace&&roots.length<=1&&<button className="workspace-fold" onClick={()=>void pickOpen()}><ChevronDown size={15}/><b>{basename.toUpperCase()}</b><MoreHorizontal size={14}/></button>}
      <div className="explorer-tree" onContextMenu={e=>{if(!workspace)return;e.preventDefault();setCtxMenu({x:e.clientX,y:e.clientY,node:{name:basename,path:'',directory:true,children:[]}})}} onDragOver={e=>{if(dragPath){e.preventDefault();e.dataTransfer.dropEffect='move'}}} onDrop={e=>{e.preventDefault();const src=dragPath;setDragPath('');setDropTarget('');if(src&&dirname(src))void moveEntry(src,'')}}>{workspace?tree.map(node=><TreeItem key={node.path} node={node}/>):<div className="sidebar-start"><FolderOpen size={28}/><p>No project opened</p><button onClick={()=>void pickOpen()}>Open folder</button><button className="secondary" onClick={()=>setShowNewProject(true)}>New OW project</button></div>}</div>
      <div className="sidebar-section-heading"><ChevronDown size={13}/> OUTLINE</div><div className="outline-hint">{active?'Symbols in the active editor':'Open a file to see its symbols'}</div>
@@ -607,7 +701,7 @@ export default function App(){
      </div><div className="tool-side-head">JVM RUNTIME EXTENSIONS</div><div className="side-menu"><button disabled={!workspace} onClick={()=>void selectRuntimeJars()}><Layers size={16}/> Select trusted JARs</button><button disabled={!workspace||!runtimeJars.length} onClick={()=>void clearRuntimeJars()}><X size={16}/> Clear extensions</button></div><div className="tool-note">Session only · primary workspace · used by Run, Check, Test and web preview. {runtimeJars.length?runtimeJars.map(path=><div key={path} title={path}>{path.split(/[\\/]/).pop()}</div>):"No runtime extensions selected."}</div><div className="tool-side-head">AI CODING AGENTS</div><div className="side-menu"><button onClick={()=>void startSession('claude')}><Zap size={16}/> Claude Code CLI</button><button onClick={()=>void startSession('codex')}><WandSparkles size={16}/> OpenAI Codex CLI</button><button onClick={()=>void startSession('shell')}><SquareTerminal size={16}/> System terminal</button><button onClick={()=>void startSession('powershell')}><TerminalSquare size={16}/> PowerShell</button><button onClick={()=>void startSession('gemini')}><Zap size={16}/> Gemini CLI</button><button onClick={()=>void startSession('aider')}><Code2 size={16}/> Aider</button><button onClick={()=>void startSession('opencode')}><WandSparkles size={16}/> OpenCode</button></div><div className="tool-side-head">DETECTED DEVELOPMENT TOOLS <button onClick={()=>void call<CliAvailability[]>('environment_status').then(setEnvironment).catch(e=>toast(String(e),true))}><RefreshCw size={12}/></button></div><div className="owler-cli-status">{environment.map(item=><div key={item.name}><span className={`status-dot ${item.available?'good':''}`}/><b>{item.name}</b><small>{item.available?'Available':'Not installed'}</small></div>)}</div><div className="tool-side-head">SOFTWARE UPDATES</div><div className="side-menu"><button onClick={()=>void checkForUpdates()}><Download size={16}/> Check for updates</button></div><div className="tool-side-head">FRAMEWORKS & DOCS</div><div className="side-menu"><button onClick={()=>void openUrl('https://github.com/OW-Programing-Language/ow-lang')}><Code2 size={16}/> OW language <ExternalLink size={12}/></button><button onClick={()=>void openUrl(night)}><Globe size={16}/> Night web framework <ExternalLink size={12}/></button><button onClick={()=>void openUrl(`${org}/flOW---OW-Modular-Framework`)}><Layers size={16}/> flOW Modulith <ExternalLink size={12}/></button></div><div className="tool-note">{toolchain.build_note||'The bundled OW compiler will be staged during installer builds.'}</div></>}
    </aside>}
    {sidebarVisible&&<div className="v-resizer" title="Drag to resize · double-click to reset" onMouseDown={startSidebarDrag} onDoubleClick={()=>{setSidebarWidth(255);localStorage.setItem('owler:sidebar-width','255')}}/>}
-   <main className="work-area"><div className="editor-surface" style={{flex:maxTerminal?'0 0 0':'1 1 auto',minHeight:maxTerminal?0:120,overflow:'hidden'}}><EditorPane tabs={tabs} active={active} onActivate={setActive} onClose={closeFile} onChange={changeFile} onSave={()=>void saveAll()} onRun={()=>void runOw('run')} onRunTest={(path,filter)=>void runOwTests(path,filter)} diagnostics={problems} jump={jump} settings={settings}/></div>
+   <main className="work-area"><div className="editor-surface" style={{flex:maxTerminal?'0 0 0':'1 1 auto',minHeight:maxTerminal?0:120,overflow:'hidden'}}><EditorPane tabs={tabs} active={active} onActivate={setActive} onClose={closeFile} onChange={changeFile} onReloadDisk={reloadDiskFile} onSave={()=>void saveAll()} onRun={()=>void runOw('run')} onRunTest={(path,filter)=>void runOwTests(path,filter)} diagnostics={problems} jump={jump} settings={settings}/></div>
     {terminalVisible&&!maxTerminal&&<div className="h-resizer" title="Drag to resize · double-click to reset" onMouseDown={startPanelDrag} onDoubleClick={()=>{setPanelHeight(268);localStorage.setItem('owler:panel-height','268')}}/>}
     {terminalVisible&&<div className={`bottom-panel ${maxTerminal?'maximized':''}`} style={maxTerminal?undefined:{height:panelHeight,minHeight:120}}>
      <div className="owler-panel-tabs"><button className={panelMode==='terminal'?'selected':''} onClick={()=>setPanelMode('terminal')}><TerminalSquare size={13}/> Terminal</button><button className={panelMode==='problems'?'selected':''} onClick={()=>setPanelMode('problems')}><ShieldCheck size={13}/> Problems <span>{problems.length}</span></button><button className={panelMode==='tests'?'selected':''} onClick={()=>setPanelMode('tests')}><FlaskConical size={13}/> Tests <span>{testReport?testReport.results.length:0}</span></button><button className={panelMode==='preview'?'selected':''} onClick={()=>setPanelMode('preview')}><Globe size={13}/> Web preview</button><span className="owler-panel-spacer"/><button onClick={()=>setTerminalVisible(false)} title="Close panel"><X size={14}/></button></div>

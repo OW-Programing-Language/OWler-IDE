@@ -3,7 +3,7 @@ use std::{fs, path::{Path, PathBuf}};
 use crate::AppState;
 use tauri::State;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Hash)]
 pub struct FileNode {
     pub name: String,
     pub path: String,
@@ -91,6 +91,7 @@ fn scan(base: &Path, dir: &Path, depth: usize, prefix: &str) -> Vec<FileNode> {
         let name = e.file_name().to_string_lossy().to_string();
         if [".git", "node_modules", "target", "dist", ".idea", ".next", "build", ".DS_Store"].contains(&name.as_str()) { return None; }
         let path = e.path();
+        if name == "deps" && dir.file_name().and_then(|n| n.to_str()) == Some(".ow") { return None; }
         if path.is_symlink() { return None; }
         let directory = path.is_dir();
         let rel = path.strip_prefix(base).ok()?.to_string_lossy().replace('\\', "/");
@@ -160,6 +161,206 @@ pub fn list_files(state: State<'_, AppState>) -> Result<Vec<FileNode>, String> {
     let roots = state.roots.lock().map_err(|e| e.to_string())?;
     if roots.is_empty() { let r = root(&state)?; return Ok(scan(&r, &r, 8, "")); }
     Ok(tree_for_roots(&roots))
+}
+
+
+/// A snapshot is bound to the exact root ordering, because @index paths are
+/// otherwise ambiguous after opening, removing or promoting workspace roots.
+fn checked_roots(state: &State<'_, AppState>, expected: &[String]) -> Result<Vec<PathBuf>, String> {
+    let roots = state.roots.lock().map_err(|e| e.to_string())?.clone();
+    if roots.len() != expected.len() || roots.iter().zip(expected).any(|(actual, wanted)| {
+        actual != &PathBuf::from(wanted)
+    }) {
+        return Err("Workspace changed; retry after the explorer reloads".into());
+    }
+    Ok(roots)
+}
+
+fn resolve_snapshot(roots: &[PathBuf], path: &str) -> Result<(PathBuf, String), String> {
+    let (index, relative) = if let Some(rest) = path.strip_prefix('@') {
+        let (index, rel) = rest.split_once('/').ok_or("Malformed workspace path")?;
+        (index.parse::<usize>().map_err(|_| "Malformed workspace path")?, rel)
+    } else { (0, path) };
+    let root = roots.get(index).ok_or("Workspace folder no longer open")?;
+    let rel = Path::new(relative);
+    if relative.is_empty() || rel.is_absolute() ||
+        rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return Err("Invalid project-relative path".into());
+    }
+    Ok((root.clone(), relative.to_string()))
+}
+
+fn disk_text(root: &Path, rel: &str) -> Result<Option<String>, String> {
+    let path = root.join(rel);
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() =>
+            return Err("Not a regular editor file".into()),
+        Ok(meta) if meta.len() > 5_000_000 => return Err("File exceeds editor size limit".into()),
+        Ok(_) => {}
+    }
+    let full = valid_path(root, rel, false)?;
+    fs::read_to_string(full).map(Some).map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize, Hash, Debug, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum DiskState {
+    Present { text: String },
+    Missing,
+    Unreadable,
+}
+
+#[derive(Serialize)]
+struct DiskUpdate {
+    path: String,
+    revision: String,
+    #[serde(flatten)]
+    state: DiskState,
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceSnapshot {
+    tree: Option<Vec<FileNode>>,
+    tree_revision: String,
+    files: Vec<DiskUpdate>,
+}
+
+fn revision(value: &impl std::hash::Hash) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn snapshot(roots: &[PathBuf], paths: &[String], known: &std::collections::HashMap<String, String>,
+            tree_revision: Option<&str>) -> WorkspaceSnapshot {
+    let tree = tree_for_roots(roots);
+    let next_tree_revision = revision(&tree);
+    let files = paths.iter().filter_map(|path| {
+        let state = match resolve_snapshot(roots, path).and_then(|(root, rel)| disk_text(&root, &rel)) {
+            Ok(Some(text)) => DiskState::Present { text },
+            Ok(None) => DiskState::Missing,
+            Err(_) => DiskState::Unreadable,
+        };
+        let next_revision = revision(&state);
+        if known.get(path) == Some(&next_revision) { return None; }
+        Some(DiskUpdate { path: path.clone(), revision: next_revision, state })
+    }).collect();
+    WorkspaceSnapshot {
+        tree: if tree_revision == Some(next_tree_revision.as_str()) { None } else { Some(tree) },
+        tree_revision: next_tree_revision,
+        files,
+    }
+}
+
+/// Poll asynchronously so filesystem traversal never blocks the Tauri UI thread.
+#[tauri::command]
+pub async fn sync_workspace(paths: Vec<String>, known: std::collections::HashMap<String, String>,
+                            tree_revision: Option<String>, expected_roots: Vec<String>,
+                            state: State<'_, AppState>) -> Result<WorkspaceSnapshot, String> {
+    let roots = checked_roots(&state, &expected_roots)?;
+    let result = tauri::async_runtime::spawn_blocking(move ||
+        snapshot(&roots, &paths, &known, tree_revision.as_deref())
+    ).await.map_err(|e| e.to_string())?;
+    checked_roots(&state, &expected_roots)?;
+    Ok(result)
+}
+
+fn checked_write(root: &Path, rel: &str, content: &str, expected: Option<&str>) -> Result<(), String> {
+    if content.len() > 5_000_000 { return Err("File exceeds editor size limit".into()); }
+    let full = valid_path(root, rel, true)?;
+    let actual = disk_text(root, rel)?;
+    if actual.as_deref() != expected {
+        return Err("File changed on disk; reload or confirm the current external version before saving".into());
+    }
+    // create_new prevents replacing a file that appeared after a missing-file check.
+    if expected.is_none() {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(full).map_err(|e| e.to_string())?;
+        file.write_all(content.as_bytes()).map_err(|e| e.to_string())
+    } else {
+        fs::write(full, content).map_err(|e| e.to_string())
+    }
+}
+
+/// Compare the actual on-disk contents with the user's acknowledged baseline.
+/// An external writer can still race after the comparison (no cross-process lock).
+#[tauri::command]
+pub fn write_file_checked(path: String, content: String, expected_content: Option<String>,
+                          expected_roots: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+    // Keep root ordering stable during resolution and write.
+    let roots = state.roots.lock().map_err(|e| e.to_string())?;
+    if roots.len() != expected_roots.len() || roots.iter().zip(&expected_roots).any(|(actual, wanted)| actual != &PathBuf::from(wanted)) {
+        return Err("Workspace changed; save cancelled".into());
+    }
+    let (root, rel) = resolve_snapshot(&roots, &path)?;
+    checked_write(&root, &rel, &content, expected_content.as_deref())
+}
+
+#[cfg(test)]
+mod live_sync_tests {
+    use super::*;
+    use std::collections::HashMap;
+    #[test]
+    fn snapshots_detect_external_create_edit_rename_delete_and_skip_unchanged() {
+        let root = std::env::temp_dir().join(format!("owler-sync-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.ow"), "first").unwrap();
+        let roots = vec![fs::canonicalize(&root).unwrap()];
+        let paths = vec!["src/main.ow".to_string()];
+        let first = snapshot(&roots, &paths, &HashMap::new(), None);
+        assert!(first.tree.is_some());
+        assert_eq!(first.files[0].state, DiskState::Present { text: "first".into() });
+        let known = HashMap::from([(paths[0].clone(), first.files[0].revision.clone())]);
+        let unchanged = snapshot(&roots, &paths, &known, Some(&first.tree_revision));
+        assert!(unchanged.tree.is_none());
+        assert!(unchanged.files.is_empty());
+        fs::write(root.join("src/main.ow"), "other").unwrap();
+        fs::write(root.join("src/new.ow"), "new").unwrap();
+        let changed = snapshot(&roots, &paths, &known, Some(&first.tree_revision));
+        assert!(changed.tree.is_some());
+        assert_eq!(changed.files[0].state, DiskState::Present { text: "other".into() });
+        fs::rename(root.join("src/main.ow"), root.join("src/renamed.ow")).unwrap();
+        let renamed = snapshot(&roots, &paths, &known, Some(&changed.tree_revision));
+        assert!(renamed.tree.is_some());
+        assert_eq!(renamed.files[0].state, DiskState::Missing);
+        fs::remove_file(root.join("src/new.ow")).unwrap();
+        assert!(snapshot(&roots, &paths, &known, Some(&renamed.tree_revision)).tree.is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn checked_save_refuses_stale_or_deleted_baselines() {
+        let root = std::env::temp_dir().join(format!("owler-save-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let path = root.join("main.ow");
+        fs::write(&path, "agent edit").unwrap();
+        assert!(checked_write(&root, "main.ow", "mine", Some("old")).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "agent edit");
+        assert!(checked_write(&root, "main.ow", "mine", None).is_err());
+        checked_write(&root, "main.ow", "mine", Some("agent edit")).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(checked_write(&root, "main.ow", "mine", Some("mine")).is_err());
+        checked_write(&root, "main.ow", "recreated", None).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), "recreated");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn multi_root_snapshot_never_confuses_identical_relative_paths() {
+        let base = std::env::temp_dir().join(format!("owler-roots-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(base.join("a")).unwrap();
+        fs::create_dir_all(base.join("b")).unwrap();
+        fs::write(base.join("a/main.ow"), "a").unwrap();
+        fs::write(base.join("b/main.ow"), "b").unwrap();
+        let roots = vec![fs::canonicalize(base.join("a")).unwrap(), fs::canonicalize(base.join("b")).unwrap()];
+        let snap = snapshot(&roots, &["main.ow".into(), "@1/main.ow".into(), "../outside".into()], &HashMap::new(), None);
+        assert_eq!(snap.files[0].state, DiskState::Present { text: "a".into() });
+        assert_eq!(snap.files[1].state, DiskState::Present { text: "b".into() });
+        assert_eq!(snap.files[2].state, DiskState::Unreadable);
+        fs::remove_dir_all(base).unwrap();
+    }
 }
 
 #[tauri::command]
