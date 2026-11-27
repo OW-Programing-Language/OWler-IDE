@@ -240,7 +240,7 @@ fn create_file(root: &Path, path: &str, content: &str) -> Result<(), String> {
 }
 
 /// Create a standard OW project without overwriting an existing directory.
-/// All starter types use the same project-root dependency manifest.
+/// Framework starters include their own pinned project-root dependency manifest.
 fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, String> {
     if name.is_empty() || name.len() > 50 ||
         !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
@@ -295,8 +295,8 @@ fn scaffold_project(parent: &Path, name: &str, kind: &str) -> Result<PathBuf, St
             Add more OW repositories and libraries to that manifest, then use \
             `ow deps update` to refresh the generated `dependencies.lock.yml`.\n\
             Commit the manifest and lockfile, not the `.ow/deps/` cache.\n\n\
-            To bundle this project:\n\n```sh\now package src/main.ow --name {name} --type {} --out dist\n```\n",
-            if kind == "web" || kind == "night" { "web" } else if kind == "ui" { "gui" } else { "console" },
+            {}\n",
+            if kind=="owcord" { "See RUNTIME.md for extension setup. This application cannot be packaged with the current OW package command." .to_string() } else {format!("To bundle this project:\n\n```sh\now package src/main.ow --name {name} --type {} --out dist\n```", if kind == "web" || kind == "night" { "web" } else if kind == "ui" { "gui" } else { "console" })},
         ))?;
         // Git is optional; the project remains usable without it.
         let _ = std::process::Command::new("git")

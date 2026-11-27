@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync,existsSync} from 'node:fs';
 import {createServer} from 'node:net';
-import {join,resolve} from 'node:path';
+import {join,resolve,delimiter} from 'node:path';
 import {tmpdir} from 'node:os';
 
 // This suite requires the freshly built OW compiler, not mocks or source scans.
@@ -158,3 +158,27 @@ for(const kind of ['night','flow','owcord']){
   }finally{rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
  });
 }
+
+test('real JVM ServiceLoader extension works with the IDE classpath launch shape',{skip:!jar},()=>{
+ const dir=mkdtempSync(join(tmpdir(),'owler-extension-'));
+ try{
+  const classes=join(dir,'classes');
+  mkdirSync(join(classes,'META-INF','services'),{recursive:true});
+  writeFileSync(join(dir,'TestExtension.java'),[
+   'import dev.oreo.RuntimeExtension;',
+   'import java.util.List;',
+   'public final class TestExtension implements RuntimeExtension {',
+   '  public boolean supports(String name) { return name.equals("owler.test.ping"); }',
+   '  public Object invoke(String name, List<Object> args) { return "extension-ok"; }',
+   '}'
+  ].join('\n'));
+  const invoke=(program,args)=>{const r=spawnSync(program,args,{cwd:dir,encoding:'utf8',timeout:30000});if(r.error)throw r.error;assert.equal(r.status,0,r.stdout+'\n'+r.stderr);return r.stdout};
+  invoke('javac',['-cp',jar,'-d',classes,join(dir,'TestExtension.java')]);
+  writeFileSync(join(classes,'META-INF','services','dev.oreo.RuntimeExtension'),'TestExtension\n');
+  const extension=join(dir,'trusted extension.jar');
+  invoke('jar',['--create','--file',extension,'-C',classes,'.']);
+  writeFileSync(join(dir,'main.ow'),'main:\n  print: extension("owler.test.ping")\n');
+  const output=invoke('java',['-cp',[jar,extension].join(delimiter),'dev.oreo.Main','run','main.ow']);
+  assert.match(output,/extension-ok/);
+ }finally{rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+});

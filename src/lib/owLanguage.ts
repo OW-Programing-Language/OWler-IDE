@@ -28,6 +28,14 @@ export const OW_REPOSITORY_METHODS = [
  ['findAll','findAll()','At most 500 records ordered by ID.'],
  ['page','page(${1:"name"}, ${2:20}, ${3:0})','Bounded page; prefix column with - for descending order.']
 ] as const;
+export function isRepositoryReceiver(lineBeforeCursor:string,source:string):boolean{
+ const receiver=lineBeforeCursor.match(/(?:this\.)?([A-Za-z_]\w*)\.[A-Za-z_]*$/)?.[1];
+ if(!receiver)return false;
+ const repositories=new Set(Array.from(source.matchAll(/^\s*@Repository\s*\([^\n]*\)\s*\n\s*class\s+([A-Za-z_]\w*)/gm),m=>m[1]));
+ const typed=Array.from(source.matchAll(new RegExp('^\\s*(?:field\\s+(?:private\\s+)?|set\\s+)'+receiver+'\\s+([A-Za-z_]\\w*)','gm')),m=>m[1]);
+ const direct=Array.from(source.matchAll(new RegExp('^\\s*set\\s+'+receiver+'\\s*:\\s*component_get\\("([A-Za-z_]\\w*)"\\)','gm')),m=>m[1]);
+ return [...typed,...direct].some(t=>repositories.has(t));
+}
 const descriptions:Record<string,string>={
  ...OW_ANNOTATIONS,
  module_scan:'Discover loaded publicly reachable modules by structural signature. Interpreter only.',
@@ -192,17 +200,11 @@ export function registerOwLanguage(editor:typeof import('monaco-editor')){
      insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet,range,detail
     }))};
    }
-   const receiver=lineBeforeCursor.match(/(?:this\.)?([A-Za-z_]\w*)\.[A-Za-z_]*$/)?.[1];
-   if(receiver){
-    const source=editor.editor.getModels().filter(m=>m.getLanguageId()==='ow').map(m=>m.getValue()).join('\n');
-    const repositories=new Set(Array.from(source.matchAll(/@Repository\s*\([^\n]*\)\s*\n\s*class\s+([A-Za-z_]\w*)/g),m=>m[1]));
-    const typed=Array.from(source.matchAll(new RegExp('(?:field\\s+(?:private\\s+)?|set\\s+)'+receiver+'\\s+([A-Za-z_]\\w*)','g')),m=>m[1]);
-    const direct=Array.from(source.matchAll(new RegExp('set\\s+'+receiver+'\\s*:\\s*component_get\\("([A-Za-z_]\\w*)"\\)','g')),m=>m[1]);
-    if([...typed,...direct].some(t=>repositories.has(t)))return {suggestions:OW_REPOSITORY_METHODS.map(([label,insertText,detail])=>({
+   const source=editor.editor.getModels().filter(m=>m.getLanguageId()==='ow').map(m=>m.getValue()).join('\n');
+   if(isRepositoryReceiver(lineBeforeCursor,source))return {suggestions:OW_REPOSITORY_METHODS.map(([label,insertText,detail])=>({
      label,insertText,detail:'Night repository · '+detail,range,kind:editor.languages.CompletionItemKind.Method,
      insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet
-    }))};
-   }
+   }))};
    return {suggestions:[
     ...snippets.map(([label,insertText,trigger])=>({label:`${trigger} · ${label}`,kind:editor.languages.CompletionItemKind.Snippet,insertText,insertTextRules:editor.languages.CompletionItemInsertTextRule.InsertAsSnippet,range,detail:'OW snippet'})),
     ...[...OW_KEYWORDS,...builtins].map(k=>({label:k,kind:editor.languages.CompletionItemKind.Keyword,insertText:k,range,detail:descriptions[k]})),

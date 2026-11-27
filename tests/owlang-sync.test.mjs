@@ -62,3 +62,15 @@ test('editor recognizes new OW annotations, native collections and discovery bui
  assert.match(source,/triggerCharacters/);
  assert.match(source,/OW_REPOSITORY_METHODS/);
 });
+
+test('repository completion recognizes typed injection and component lookup but not ordinary receivers',async()=>{
+ const source=read('src/lib/owLanguage.ts').replace("from './owModernize'","from '"+'data:text/javascript;base64,'+Buffer.from(compiled).toString('base64')+"'");
+ const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
+ const {isRepositoryReceiver,OW_REPOSITORY_METHODS}=await import('data:text/javascript;base64,'+Buffer.from(js).toString('base64'));
+ const fixture='@Repository("users", "id")\nclass UserRepository:\n\n@Service\nclass UserService:\n  @Inject\n  field private users UserRepository\n  field private plain OtherService\nmain:\n  set repo: component_get("UserRepository")\n';
+ assert.equal(isRepositoryReceiver('  call: this.users.up',fixture),true);
+ assert.equal(isRepositoryReceiver('  set value: repo.',fixture),true);
+ assert.equal(isRepositoryReceiver('  call: this.plain.',fixture),false);
+ assert.equal(isRepositoryReceiver('  call: something.',fixture),false);
+ assert.equal(OW_REPOSITORY_METHODS.length,7);
+});
